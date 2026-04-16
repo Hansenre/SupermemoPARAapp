@@ -1,6 +1,15 @@
-﻿const state = {
+﻿const PARA_FOLDER_MAP = {
+  inbox: 'Inbox',
+  projects: 'Projects',
+  areas: 'Areas',
+  resources: 'Resources',
+  archives: 'Archives'
+};
+
+const state = {
   queue: [],
-  popupItem: null
+  popupItem: null,
+  currentEditing: null
 };
 
 const queueEl = document.getElementById('queue');
@@ -12,12 +21,19 @@ const modalEl = document.getElementById('reviewModal');
 const modalTitleEl = document.getElementById('modalTitle');
 const modalMetaEl = document.getElementById('modalMeta');
 const modalOpenFileEl = document.getElementById('modalOpenFile');
+const browserCategoryEl = document.getElementById('browserCategory');
+const browserPathEl = document.getElementById('browserPath');
+const browserListEl = document.getElementById('browserList');
+const editingFileEl = document.getElementById('editingFile');
+const fileEditorEl = document.getElementById('fileEditor');
 
 init();
 
 async function init() {
   document.getElementById('summaryForm').addEventListener('submit', createSummary);
   modalEl.addEventListener('click', onModalClick);
+  document.getElementById('browseBtn').addEventListener('click', loadParaFolder);
+  document.getElementById('saveFileBtn').addEventListener('click', saveEditingFile);
 
   await refreshAll();
 
@@ -29,6 +45,7 @@ async function init() {
 
 async function refreshAll() {
   await Promise.all([refreshDashboard(), refreshQueue(), refreshLibrary()]);
+  await loadParaFolder();
   openPopupIfNeeded();
 }
 
@@ -188,6 +205,104 @@ function openManualPopup(id) {
   }
 }
 
+async function loadParaFolder() {
+  const category = browserCategoryEl.value;
+  const subpath = browserPathEl.value.trim();
+
+  const params = new URLSearchParams({ category, subpath });
+  const res = await fetch(`/api/para/browse?${params.toString()}`);
+
+  if (!res.ok) {
+    browserListEl.innerHTML = '<p class="muted">Nao foi possivel abrir esta pasta.</p>';
+    return;
+  }
+
+  const data = await res.json();
+  browserPathEl.value = data.currentPath || '';
+
+  const parentPath = getParentPath(data.currentPath || '');
+  const lines = [];
+
+  if (data.currentPath) {
+    lines.push(`<article class="item"><button onclick="openParaDir('${escapeJs(parentPath)}')">.. voltar</button></article>`);
+  }
+
+  for (const entry of data.entries) {
+    if (entry.type === 'dir') {
+      lines.push(`
+        <article class="item">
+          <strong>[Pasta] ${escapeHtml(entry.name)}</strong>
+          <button onclick="openParaDir('${escapeJs(entry.relativePath)}')">Abrir pasta</button>
+        </article>
+      `);
+    } else {
+      const fileUrl = toVaultUrl(data.category, entry.relativePath);
+      lines.push(`
+        <article class="item">
+          <strong>${escapeHtml(entry.name)}</strong>
+          <small>${entry.editable ? 'Editavel (.md/.txt)' : 'Somente leitura'}</small>
+          <a href="${fileUrl}" target="_blank" rel="noreferrer">Abrir arquivo</a>
+          ${entry.editable ? `<button onclick="openParaFile('${escapeJs(entry.relativePath)}')">Editar</button>` : ''}
+        </article>
+      `);
+    }
+  }
+
+  browserListEl.innerHTML = lines.join('') || '<p class="muted">Pasta vazia.</p>';
+}
+
+async function openParaFile(relativePath) {
+  const params = new URLSearchParams({
+    category: browserCategoryEl.value,
+    filePath: relativePath
+  });
+
+  const res = await fetch(`/api/para/file?${params.toString()}`);
+  if (!res.ok) {
+    alert('Nao foi possivel abrir arquivo para edicao.');
+    return;
+  }
+
+  const data = await res.json();
+  state.currentEditing = {
+    category: data.category,
+    filePath: data.filePath
+  };
+
+  editingFileEl.textContent = `Editando: ${data.category}/${data.filePath}`;
+  fileEditorEl.value = data.content;
+}
+
+async function saveEditingFile() {
+  if (!state.currentEditing) {
+    alert('Abra um arquivo .md/.txt antes de salvar.');
+    return;
+  }
+
+  const res = await fetch('/api/para/file', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category: state.currentEditing.category,
+      filePath: state.currentEditing.filePath,
+      content: fileEditorEl.value
+    })
+  });
+
+  if (!res.ok) {
+    alert('Falha ao salvar arquivo.');
+    return;
+  }
+
+  await loadParaFolder();
+  alert('Arquivo salvo com sucesso.');
+}
+
+function openParaDir(relativePath) {
+  browserPathEl.value = relativePath;
+  loadParaFolder();
+}
+
 function toPublicFileUrl(fullPath) {
   const normalized = fullPath.replaceAll('\\\\', '/').replaceAll('\\', '/');
   const marker = '/KnowledgeOSVault/';
@@ -201,12 +316,30 @@ function toPublicFileUrl(fullPath) {
   return `/vault/${relative}`;
 }
 
+function toVaultUrl(category, relativePath) {
+  const folder = PARA_FOLDER_MAP[category] || 'Resources';
+  return `/vault/${folder}/${relativePath}`;
+}
+
+function getParentPath(currentPath) {
+  if (!currentPath) {
+    return '';
+  }
+
+  const idx = currentPath.lastIndexOf('/');
+  if (idx === -1) {
+    return '';
+  }
+
+  return currentPath.slice(0, idx);
+}
+
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('pt-BR');
 }
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -214,5 +347,11 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function escapeJs(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+}
+
 window.archiveSummary = archiveSummary;
 window.openManualPopup = openManualPopup;
+window.openParaDir = openParaDir;
+window.openParaFile = openParaFile;

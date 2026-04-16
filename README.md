@@ -5,9 +5,14 @@ App proprio para revisao espacada (3/10/30/60) com organizacao PARA (Projects, A
 ## O que o app faz
 
 - Cadastro de resumos (upload de arquivo ou texto)
+- Definicao de destino no PARA com:
+  - categoria (Projects/Areas/Resources/Inbox)
+  - subpasta opcional
+  - nome do arquivo opcional
 - Organizacao automatica no cofre `KnowledgeOSVault` em pastas PARA
 - Fila de revisao diaria
 - Pop-up de revisao para itens vencidos
+- Explorador PARA para navegar nas pastas e editar arquivos `.md/.txt`
 - Reagendamento conforme desempenho:
   - `Lembrei bem`: avanca no ciclo
   - `Parcial`: revisa novamente em 2 dias

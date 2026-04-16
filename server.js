@@ -30,13 +30,25 @@ app.use('/vault', express.static(VAULT_DIR));
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const para = normalizePara(req.body.paraCategory || 'resources');
-    cb(null, path.join(VAULT_DIR, PARA_MAP[para]));
+    try {
+      const { target } = resolveParaTargetFolder(req.body.paraCategory, req.body.folderName);
+      cb(null, target);
+    } catch (err) {
+      cb(err);
+    }
   },
   filename: (req, file, cb) => {
-    const safe = sanitizeFileName(file.originalname);
-    const stamp = Date.now();
-    cb(null, `${stamp}__${safe}`);
+    try {
+      const { target } = resolveParaTargetFolder(req.body.paraCategory, req.body.folderName);
+      const originalExt = path.extname(file.originalname) || '';
+      const suggested = sanitizeFileName(req.body.fileName || '');
+      const fallbackStem = sanitizeFileName(path.parse(file.originalname).name || 'resumo');
+      const finalStem = suggested || fallbackStem;
+      const desiredName = `${finalStem}${originalExt}`;
+      cb(null, createUniqueFileName(target, desiredName));
+    } catch (err) {
+      cb(err);
+    }
   }
 });
 const upload = multer({ storage });
@@ -91,10 +103,109 @@ app.get('/api/summaries', (req, res) => {
   res.json(rows);
 });
 
+app.get('/api/para/browse', (req, res) => {
+  try {
+    const para = normalizePara(req.query.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const subpath = String(req.query.subpath || '');
+    const targetDir = resolveInsideBase(baseDir, subpath);
+
+    if (!fs.existsSync(targetDir)) {
+      return res.status(404).json({ error: 'Pasta nao encontrada.' });
+    }
+
+    const entries = fs.readdirSync(targetDir, { withFileTypes: true })
+      .map((entry) => {
+        const absolutePath = path.join(targetDir, entry.name);
+        const relativePath = toUnixPath(path.relative(baseDir, absolutePath));
+        const ext = path.extname(entry.name).toLowerCase();
+        const editable = entry.isFile() && ['.md', '.txt'].includes(ext);
+
+        return {
+          name: entry.name,
+          type: entry.isDirectory() ? 'dir' : 'file',
+          relativePath,
+          editable
+        };
+      })
+      .sort((a, b) => {
+        if (a.type !== b.type) {
+          return a.type === 'dir' ? -1 : 1;
+        }
+        return a.name.localeCompare(b.name, 'pt-BR');
+      });
+
+    res.json({
+      category: para,
+      categoryFolder: PARA_MAP[para],
+      currentPath: toUnixPath(path.relative(baseDir, targetDir)),
+      entries
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao listar pasta PARA.' });
+  }
+});
+
+app.get('/api/para/file', (req, res) => {
+  try {
+    const para = normalizePara(req.query.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const filePath = String(req.query.filePath || '');
+    const absolutePath = resolveInsideBase(baseDir, filePath);
+
+    if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+      return res.status(404).json({ error: 'Arquivo nao encontrado.' });
+    }
+
+    const ext = path.extname(absolutePath).toLowerCase();
+    if (!['.md', '.txt'].includes(ext)) {
+      return res.status(400).json({ error: 'Edicao disponivel apenas para .md e .txt.' });
+    }
+
+    const content = fs.readFileSync(absolutePath, 'utf8');
+    res.json({
+      category: para,
+      filePath: toUnixPath(path.relative(baseDir, absolutePath)),
+      content
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao abrir arquivo.' });
+  }
+});
+
+app.put('/api/para/file', (req, res) => {
+  try {
+    const para = normalizePara(req.body.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const filePath = String(req.body.filePath || '');
+    const content = String(req.body.content || '');
+    const absolutePath = resolveInsideBase(baseDir, filePath);
+
+    if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+      return res.status(404).json({ error: 'Arquivo nao encontrado.' });
+    }
+
+    const ext = path.extname(absolutePath).toLowerCase();
+    if (!['.md', '.txt'].includes(ext)) {
+      return res.status(400).json({ error: 'Edicao disponivel apenas para .md e .txt.' });
+    }
+
+    fs.writeFileSync(absolutePath, content, 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao salvar arquivo.' });
+  }
+});
+
 app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
   try {
     const title = (req.body.title || '').trim();
     const para = normalizePara(req.body.paraCategory || 'resources');
+    const folderName = (req.body.folderName || '').trim();
+    const fileNameInput = (req.body.fileName || '').trim();
     const summaryText = (req.body.summaryText || '').trim();
 
     if (!title) {
@@ -106,10 +217,10 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     if (req.file) {
       filePath = req.file.path;
     } else if (summaryText) {
-      const folder = path.join(VAULT_DIR, PARA_MAP[para]);
-      const datePart = new Date().toISOString().slice(0, 10);
-      const fileName = `${datePart}__${sanitizeFileName(title)}.md`;
-      const fullPath = path.join(folder, fileName);
+      const { target } = resolveParaTargetFolder(para, folderName);
+      const stem = sanitizeFileName(fileNameInput || title);
+      const finalFileName = createUniqueFileName(target, `${stem}.md`);
+      const fullPath = path.join(target, finalFileName);
       const content = buildSummaryTemplate(title, summaryText);
       fs.writeFileSync(fullPath, content, 'utf8');
       filePath = fullPath;
@@ -289,4 +400,74 @@ function startOfDayISO(date) {
 
 function buildSummaryTemplate(title, body) {
   return `# ${title}\n\n## Contexto\n${body}\n\n## 5 bullets-chave\n- \n- \n- \n- \n- \n\n## Exemplo pratico\n- \n\n## 3 perguntas de recall\n1. \n2. \n3. \n\n## Proxima acao\n- `;
+}
+
+function resolveParaTargetFolder(category, folderName) {
+  const para = normalizePara(category);
+  const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+  const safeSubFolder = sanitizeFolderPath(folderName);
+  const target = safeSubFolder ? path.join(baseDir, safeSubFolder) : baseDir;
+
+  if (!isInsideBase(baseDir, target)) {
+    throw new Error('Subpasta invalida.');
+  }
+
+  fs.mkdirSync(target, { recursive: true });
+  return { para, target, safeSubFolder };
+}
+
+function sanitizeFolderPath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  const parts = raw
+    .split(/[\\/]+/)
+    .map((part) => sanitizeFileName(part))
+    .filter(Boolean);
+
+  return parts.join(path.sep);
+}
+
+function createUniqueFileName(folderPath, requestedName) {
+  const parsed = path.parse(requestedName);
+  const baseName = sanitizeFileName(parsed.name || 'resumo');
+  const ext = sanitizeExtension(parsed.ext);
+  let candidate = `${baseName}${ext}`;
+  let count = 1;
+
+  while (fs.existsSync(path.join(folderPath, candidate))) {
+    candidate = `${baseName}_${count}${ext}`;
+    count += 1;
+  }
+
+  return candidate;
+}
+
+function sanitizeExtension(ext) {
+  const cleaned = String(ext || '').replace(/[^a-zA-Z0-9.]/g, '').toLowerCase();
+  if (!cleaned.startsWith('.')) {
+    return cleaned ? `.${cleaned}` : '';
+  }
+  return cleaned;
+}
+
+function resolveInsideBase(baseDir, relativePath) {
+  const sanitizedRelative = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const target = path.resolve(baseDir, sanitizedRelative);
+  if (!isInsideBase(baseDir, target)) {
+    throw new Error('Caminho invalido.');
+  }
+  return target;
+}
+
+function isInsideBase(baseDir, targetPath) {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(targetPath);
+  return resolvedTarget === resolvedBase || resolvedTarget.startsWith(`${resolvedBase}${path.sep}`);
+}
+
+function toUnixPath(value) {
+  return String(value || '').replace(/\\/g, '/');
 }
