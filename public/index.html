@@ -1,0 +1,82 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SuperMemo PARA</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>SuperMemo PARA</h1>
+      <p>Resumos de 1 pagina com revisao espacada em 3/10/30/60 dias.</p>
+    </header>
+
+    <main class="layout">
+      <section class="card stats">
+        <h2>Painel</h2>
+        <div class="stats-grid">
+          <div>
+            <strong id="dueToday">0</strong>
+            <span>Revisoes hoje</span>
+          </div>
+          <div>
+            <strong id="activeTotal">0</strong>
+            <span>Resumos ativos</span>
+          </div>
+        </div>
+        <p id="paraBreakdown" class="muted"></p>
+      </section>
+
+      <section class="card">
+        <h2>Novo resumo</h2>
+        <form id="summaryForm">
+          <label>Titulo</label>
+          <input name="title" required maxlength="120" />
+
+          <label>Categoria PARA</label>
+          <select name="paraCategory">
+            <option value="projects">Projects</option>
+            <option value="areas">Areas</option>
+            <option value="resources" selected>Resources</option>
+            <option value="inbox">Inbox</option>
+          </select>
+
+          <label>Upload do resumo (pdf/md/txt)</label>
+          <input type="file" name="summaryFile" />
+
+          <label>Ou cole o resumo aqui</label>
+          <textarea name="summaryText" rows="8" placeholder="Maximo recomendado: 1 pagina"></textarea>
+
+          <button type="submit">Salvar resumo</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Fila de revisao</h2>
+        <div id="queue" class="list"></div>
+      </section>
+
+      <section class="card">
+        <h2>Biblioteca</h2>
+        <div id="library" class="list"></div>
+      </section>
+    </main>
+
+    <div id="reviewModal" class="modal hidden">
+      <div class="modal-content">
+        <h3 id="modalTitle"></h3>
+        <p id="modalMeta" class="muted"></p>
+        <a id="modalOpenFile" target="_blank" rel="noreferrer">Abrir resumo</a>
+
+        <div class="actions">
+          <button data-grade="good">Lembrei bem</button>
+          <button data-grade="partial">Parcial</button>
+          <button data-grade="forgot">Esqueci</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+﻿{
+  "name": "supermemo-para-app",
+  "version": "1.0.0",
+  "description": "Sistema de revisao espacada com metodologia PARA",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "setup:folders": "node scripts/setupFolders.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}
