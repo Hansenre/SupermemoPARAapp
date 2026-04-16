@@ -76,3 +76,28 @@ App proprio para revisao espacada (3/10/30/60) com organizacao PARA (Projects, A
 
 - O app salva arquivos de resumo dentro de `KnowledgeOSVault`.
 - Para uso multi-dispositivo, voce pode sincronizar essa pasta via OneDrive/Dropbox.
+
+## App Windows (Tauri)
+
+### Pre-requisitos
+
+- Node.js instalado
+- Rust (cargo) instalado
+- Ferramentas de build do Tauri para Windows
+
+### Rodar em modo desktop (dev)
+
+1. Instale dependencias npm:
+   - `npm install`
+2. Inicie o app desktop:
+   - `npm run tauri:dev`
+
+### Gerar instalador Windows
+
+1. Execute:
+   - `npm run tauri:build`
+
+Observacoes:
+- O launcher Tauri inicia o `server.js` internamente.
+- Dados do app (banco/vault) sao gravados na pasta de dados do usuario no Windows.
+- O runtime Node precisa estar instalado na maquina para o launcher executar o servidor local.

@@ -6,12 +6,15 @@ const Database = require('better-sqlite3');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
+const HOST = process.env.HOST || '127.0.0.1';
 
 const BASE_DIR = __dirname;
-const DATA_DIR = path.join(BASE_DIR, 'data');
-const DB_PATH = path.join(DATA_DIR, 'app.db');
-const BACKUP_DIR = path.join(DATA_DIR, 'backups');
-const VAULT_DIR = path.join(BASE_DIR, 'KnowledgeOSVault');
+const APP_HOME = process.env.SMP_APP_HOME || BASE_DIR;
+const PUBLIC_DIR = process.env.SMP_PUBLIC_DIR || path.join(APP_HOME, 'public');
+const DATA_DIR = process.env.SMP_DATA_DIR || path.join(APP_HOME, 'data');
+const DB_PATH = process.env.SMP_DB_PATH || path.join(DATA_DIR, 'app.db');
+const BACKUP_DIR = process.env.SMP_BACKUP_DIR || path.join(DATA_DIR, 'backups');
+const VAULT_DIR = process.env.SMP_VAULT_DIR || path.join(APP_HOME, 'KnowledgeOSVault');
 const PARA_MAP = {
   inbox: 'Inbox',
   projects: 'Projects',
@@ -26,11 +29,11 @@ const db = new Database(DB_PATH);
 initDb();
 
 app.use(express.json());
-app.use(express.static(path.join(BASE_DIR, 'public')));
+app.use(express.static(PUBLIC_DIR));
 app.use('/vault', express.static(VAULT_DIR));
 
 app.get('/view', (req, res) => {
-  res.sendFile(path.join(BASE_DIR, 'public', 'viewer.html'));
+  res.sendFile(path.join(PUBLIC_DIR, 'viewer.html'));
 });
 
 const storage = multer.diskStorage({
@@ -931,8 +934,8 @@ app.delete('/api/summaries/:id', (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`SuperMemo PARA app rodando em http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`SuperMemo PARA app rodando em http://${HOST}:${PORT}`);
 });
 
 function ensureDirs() {

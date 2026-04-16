@@ -6,11 +6,16 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "setup:folders": "node scripts/setupFolders.js"
+    "setup:folders": "node scripts/setupFolders.js",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
     "express": "^4.21.2",
     "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
   }
 }

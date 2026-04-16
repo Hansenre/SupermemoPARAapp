@@ -111,19 +111,6 @@
         <div id="alertsList" class="list"></div>
       </section>
 
-      <section class="panel">
-        <h2>Backup e Restore</h2>
-        <p class="muted">Crie backup do banco e restaure quando precisar.</p>
-        <button id="createBackupBtn" type="button" class="btn-secondary">Criar backup agora</button>
-        <label>Backups disponiveis</label>
-        <select id="backupSelect"></select>
-        <div class="item-actions">
-          <button id="refreshBackupsBtn" type="button" class="btn-secondary">Atualizar lista</button>
-          <button id="restoreBackupBtn" type="button" class="btn-danger">Restaurar backup</button>
-        </div>
-        <p id="backupStatus" class="muted">Nenhuma acao executada.</p>
-      </section>
-
       <section class="panel panel-wide">
         <h2>Explorador PARA</h2>
 
@@ -165,6 +152,18 @@
           <textarea id="fileEditor" rows="12" placeholder="Edicao de arquivos .md/.txt"></textarea>
           <button id="saveFileBtn" type="button">Salvar arquivo aberto</button>
         </div>
+      </section>
+
+      <section class="panel panel-full panel-subtle">
+        <h3>Backup e Restore</h3>
+        <p class="muted">Opcional. Use apenas quando precisar proteger/restaurar o banco.</p>
+        <div class="backup-row">
+          <button id="createBackupBtn" type="button" class="btn-secondary btn-small">Criar backup</button>
+          <button id="refreshBackupsBtn" type="button" class="btn-secondary btn-small">Atualizar</button>
+          <select id="backupSelect"></select>
+          <button id="restoreBackupBtn" type="button" class="btn-danger btn-small">Restaurar</button>
+        </div>
+        <p id="backupStatus" class="muted">Nenhuma acao executada.</p>
       </section>
     </main>
 
