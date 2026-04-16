@@ -14,6 +14,11 @@
 
 * { box-sizing: border-box; }
 
+html, body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   font-family: "Manrope", "Segoe UI", sans-serif;
@@ -80,11 +85,30 @@ button { margin-top: 10px; border: none; background: linear-gradient(90deg, var(
 .editor-wrap { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
 .muted { color: var(--muted); }
 
-.modal { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: flex; justify-content: center; align-items: center; padding: 16px; }
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,.35);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 18px;
+  overflow: auto;
+}
 .hidden { display: none; }
-.modal-content { width: min(680px, 100%); border-radius: 14px; background: var(--surface); border: 1px solid var(--line); padding: 18px; }
+.modal-content {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 36px);
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 .modal-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
 .modal-header h3 { margin: 0; }
+.modal-header .btn-secondary { width: auto; margin: 0; }
 
 .preview-box {
   background: #0f172a;
@@ -93,8 +117,12 @@ button { margin-top: 10px; border: none; background: linear-gradient(90deg, var(
   border-radius: 10px;
   padding: 10px;
   white-space: pre-wrap;
-  max-height: 260px;
+  max-height: 200px;
   overflow: auto;
+}
+
+#quickSummaryEditor {
+  max-height: 240px;
 }
 
 .review-steps { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -125,4 +153,11 @@ button { margin-top: 10px; border: none; background: linear-gradient(90deg, var(
   .grid-two { grid-template-columns: 1fr; }
   .stats-row { width: 100%; }
   .stat-pill { flex: 1; }
+  .modal {
+    padding: 10px;
+  }
+  .modal-content {
+    max-height: calc(100vh - 20px);
+    padding: 14px;
+  }
 }

@@ -168,6 +168,37 @@ app.get('/api/weekly-goal/details', (req, res) => {
   });
 });
 
+app.get('/api/weekly-goal/day-details', (req, res) => {
+  try {
+    const dateRaw = String(req.query.date || '').trim();
+    if (!dateRaw) {
+      return res.status(400).json({ error: 'Data obrigatoria (YYYY-MM-DD).' });
+    }
+
+    const dayStart = new Date(`${dateRaw}T00:00:00`);
+    if (Number.isNaN(dayStart.getTime())) {
+      return res.status(400).json({ error: 'Data invalida.' });
+    }
+    const dayEnd = addDays(dayStart, 1);
+
+    const rows = db.prepare(`
+      SELECT s.id, s.title, s.para_category AS paraCategory, s.next_review_at AS nextReviewAt,
+             (SELECT COUNT(*) FROM flashcards f WHERE f.summary_id = s.id) AS flashcardsCount
+      FROM summaries s
+      WHERE s.status = 'active' AND s.next_review_at >= ? AND s.next_review_at < ?
+      ORDER BY s.next_review_at ASC
+    `).all(dayStart.toISOString(), dayEnd.toISOString());
+
+    res.json({
+      date: dateRaw,
+      items: rows
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao carregar detalhes do dia.' });
+  }
+});
+
 app.get('/api/metacog/alerts', (req, res) => {
   const rows = db.prepare(`
     SELECT id, summary_id AS summaryId, review_id AS reviewId, title, message, created_at AS createdAt
@@ -236,16 +267,19 @@ app.get('/api/summaries/:id/quick', (req, res) => {
     return res.status(404).json({ error: 'Resumo nao encontrado.' });
   }
 
-  const flashcardsCount = db.prepare(`
-    SELECT COUNT(*) AS total
+  const flashcards = db.prepare(`
+    SELECT id, prompt, answer
     FROM flashcards
     WHERE summary_id = ?
-  `).get(id).total;
+    ORDER BY id ASC
+  `).all(id);
+  const flashcardsCount = flashcards.length;
 
   let preview = '';
   let previewType = 'text';
   let fileSize = null;
   let fileUpdatedAt = null;
+  let editableText = false;
 
   if (summary.filePath && fs.existsSync(summary.filePath)) {
     const stat = fs.statSync(summary.filePath);
@@ -257,6 +291,7 @@ app.get('/api/summaries/:id/quick', (req, res) => {
       const content = fs.readFileSync(summary.filePath, 'utf8');
       preview = content.slice(0, 1200);
       previewType = 'text';
+      editableText = true;
     } else if (ext === '.pdf') {
       preview = 'Arquivo PDF detectado. Use "Abrir" para visualizar o conteudo completo.';
       previewType = 'pdf';
@@ -272,11 +307,80 @@ app.get('/api/summaries/:id/quick', (req, res) => {
   res.json({
     ...summary,
     flashcardsCount,
+    flashcards,
     preview,
     previewType,
+    editableText,
     fileSize,
     fileUpdatedAt
   });
+});
+
+app.put('/api/summaries/:id/memory', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const summary = db.prepare('SELECT id FROM summaries WHERE id = ?').get(id);
+    if (!summary) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+
+    const lociPalace = String(req.body.lociPalace || '').trim().slice(0, 160);
+    const lociRoom = String(req.body.lociRoom || '').trim().slice(0, 160);
+    const lociHook = String(req.body.lociHook || '').trim().slice(0, 500);
+    const flashcardsRaw = req.body.flashcardsRaw;
+    const cards = parseFlashcards(flashcardsRaw);
+
+    const tx = db.transaction(() => {
+      db.prepare(`
+        UPDATE summaries
+        SET loci_palace = ?, loci_room = ?, loci_hook = ?
+        WHERE id = ?
+      `).run(lociPalace || null, lociRoom || null, lociHook || null, id);
+
+      db.prepare('DELETE FROM flashcards WHERE summary_id = ?').run(id);
+      const insert = db.prepare(`
+        INSERT INTO flashcards (summary_id, prompt, answer, created_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      const now = new Date().toISOString();
+      for (const card of cards) {
+        insert.run(id, card.prompt, card.answer, now);
+      }
+    });
+    tx();
+
+    res.json({ ok: true, flashcardsCount: cards.length });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao salvar dados de memoria.' });
+  }
+});
+
+app.put('/api/summaries/:id/text', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const summary = db.prepare('SELECT id, file_path AS filePath FROM summaries WHERE id = ?').get(id);
+    if (!summary) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+
+    const filePath = String(summary.filePath || '');
+    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return res.status(404).json({ error: 'Arquivo do resumo nao encontrado.' });
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (!['.md', '.txt'].includes(ext)) {
+      return res.status(400).json({ error: 'Edicao de texto disponivel apenas para arquivos .md/.txt.' });
+    }
+
+    const content = String(req.body.content || '');
+    fs.writeFileSync(filePath, content, 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao salvar texto do resumo.' });
+  }
 });
 
 app.get('/api/para/browse', (req, res) => {
@@ -539,7 +643,7 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
       insertCard.run(summaryId, card.prompt, card.answer, created.toISOString());
     }
 
-    res.status(201).json({ id: result.lastInsertRowid });
+    res.status(201).json({ id: result.lastInsertRowid, flashcardsCount: flashcards.length });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao criar resumo.' });
@@ -786,12 +890,9 @@ function parseFlashcards(raw) {
   const cards = [];
 
   for (const line of lines) {
-    const idx = line.indexOf('::');
-    if (idx === -1) {
-      continue;
-    }
-    const prompt = line.slice(0, idx).trim();
-    const answer = line.slice(idx + 2).trim();
+    const parsed = splitFlashcardLine(line);
+    if (!parsed) continue;
+    const { prompt, answer } = parsed;
     if (!prompt || !answer) {
       continue;
     }
@@ -802,6 +903,19 @@ function parseFlashcards(raw) {
   }
 
   return cards.slice(0, 50);
+}
+
+function splitFlashcardLine(line) {
+  const separators = ['::', '=>', '->', ':'];
+  for (const sep of separators) {
+    const idx = line.indexOf(sep);
+    if (idx <= 0) continue;
+    const prompt = line.slice(0, idx).trim();
+    const answer = line.slice(idx + sep.length).trim();
+    if (!prompt || !answer) continue;
+    return { prompt, answer };
+  }
+  return null;
 }
 
 function resolveParaTargetFolder(category, folderName) {

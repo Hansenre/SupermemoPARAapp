@@ -210,6 +210,8 @@
         </div>
         <p id="weeklyGoalSummary" class="muted"></p>
         <div id="weeklyGoalDailyList" class="list"></div>
+        <h4 id="weeklyDayDetailTitle">Dia selecionado</h4>
+        <div id="weeklyDayItemsList" class="list"></div>
         <h4>Foco sugerido (7 dias)</h4>
         <div id="weeklyGoalFocusList" class="list"></div>
       </div>
@@ -222,8 +224,25 @@
           <button id="closeQuickSummaryModalBtn" type="button" class="btn-secondary">Fechar</button>
         </div>
         <p id="quickSummaryMeta" class="muted"></p>
-        <p id="quickSummaryLoci" class="muted"></p>
+        <p class="muted">Flashcards tambem aparecem no pop-up de Revisao (etapa 2).</p>
+
+        <div class="memory-box">
+          <h3>Loci do resumo</h3>
+          <input id="quickLociPalace" placeholder="Palacio" />
+          <input id="quickLociRoom" placeholder="Sala/rota" />
+          <textarea id="quickLociHook" rows="2" placeholder="Gancho visual"></textarea>
+        </div>
+
+        <label>Flashcards conectados (1 por linha: Pergunta::Resposta)</label>
+        <textarea id="quickFlashcardsRaw" rows="4" placeholder="Pergunta::Resposta"></textarea>
+        <button id="saveQuickMemoryBtn" type="button" class="btn-secondary">Salvar Loci + Flashcards</button>
+
         <p id="quickSummaryCards" class="muted"></p>
+        <div id="quickFlashcardsPreview" class="list"></div>
+
+        <label>Texto do resumo</label>
+        <textarea id="quickSummaryEditor" rows="8" placeholder="Edicao do texto (.md/.txt)"></textarea>
+        <button id="saveQuickTextBtn" type="button">Salvar texto do resumo</button>
         <pre id="quickSummaryPreview" class="preview-box"></pre>
         <div class="item-actions">
           <a id="quickSummaryOpenLink" target="_blank" rel="noreferrer">Abrir arquivo</a>

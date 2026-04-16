@@ -66,19 +66,29 @@ const weeklyGoalModalEl = document.getElementById('weeklyGoalModal');
 const closeWeeklyGoalModalBtnEl = document.getElementById('closeWeeklyGoalModalBtn');
 const weeklyGoalSummaryEl = document.getElementById('weeklyGoalSummary');
 const weeklyGoalDailyListEl = document.getElementById('weeklyGoalDailyList');
+const weeklyDayDetailTitleEl = document.getElementById('weeklyDayDetailTitle');
+const weeklyDayItemsListEl = document.getElementById('weeklyDayItemsList');
 const weeklyGoalFocusListEl = document.getElementById('weeklyGoalFocusList');
 const quickSummaryModalEl = document.getElementById('quickSummaryModal');
 const closeQuickSummaryModalBtnEl = document.getElementById('closeQuickSummaryModalBtn');
 const quickSummaryTitleEl = document.getElementById('quickSummaryTitle');
 const quickSummaryMetaEl = document.getElementById('quickSummaryMeta');
-const quickSummaryLociEl = document.getElementById('quickSummaryLoci');
 const quickSummaryCardsEl = document.getElementById('quickSummaryCards');
 const quickSummaryPreviewEl = document.getElementById('quickSummaryPreview');
 const quickSummaryOpenLinkEl = document.getElementById('quickSummaryOpenLink');
+const quickLociPalaceEl = document.getElementById('quickLociPalace');
+const quickLociRoomEl = document.getElementById('quickLociRoom');
+const quickLociHookEl = document.getElementById('quickLociHook');
+const quickFlashcardsRawEl = document.getElementById('quickFlashcardsRaw');
+const saveQuickMemoryBtnEl = document.getElementById('saveQuickMemoryBtn');
+const quickSummaryEditorEl = document.getElementById('quickSummaryEditor');
+const saveQuickTextBtnEl = document.getElementById('saveQuickTextBtn');
+const quickFlashcardsPreviewEl = document.getElementById('quickFlashcardsPreview');
 const summaryParaCategoryEl = document.getElementById('summaryParaCategory');
 const summaryFolderNameEl = document.getElementById('summaryFolderName');
 const summarySavedFoldersSelectEl = document.getElementById('summarySavedFoldersSelect');
 const summaryUseSavedFolderBtnEl = document.getElementById('summaryUseSavedFolderBtn');
+let currentQuickSummary = null;
 
 init();
 
@@ -95,6 +105,8 @@ async function init() {
   weeklyGoalCardEl.addEventListener('click', openWeeklyGoalDetails);
   closeWeeklyGoalModalBtnEl.addEventListener('click', closeWeeklyGoalModal);
   closeQuickSummaryModalBtnEl.addEventListener('click', closeQuickSummaryModal);
+  saveQuickMemoryBtnEl.addEventListener('click', saveQuickMemory);
+  saveQuickTextBtnEl.addEventListener('click', saveQuickText);
   summaryParaCategoryEl.addEventListener('change', refreshSummarySavedFoldersSelector);
   summaryUseSavedFolderBtnEl.addEventListener('click', applySavedSummaryFolder);
 
@@ -218,8 +230,13 @@ async function openWeeklyGoalDetails() {
 
   weeklyGoalDailyListEl.innerHTML = (data.dailyPlan || []).map((day) => `
     <article class="item">
-      <strong>${formatDate(day.date)}</strong>
-      <small class="muted">Meta: ${day.target} | Previstas: ${day.dueCount}</small>
+      <div class="item-head">
+        <strong>${formatDate(day.date)}</strong>
+        <small class="muted">Meta: ${day.target} | Previstas: ${day.dueCount}</small>
+      </div>
+      <div class="item-actions">
+        <button onclick="openWeeklyDayDetails('${toDateInput(day.date)}')" class="btn-secondary">Ver itens do dia</button>
+      </div>
     </article>
   `).join('') || '<p class="muted">Sem dados diarios.</p>';
 
@@ -230,11 +247,42 @@ async function openWeeklyGoalDetails() {
     </article>
   `).join('') || '<p class="muted">Sem foco definido.</p>';
 
+  weeklyDayDetailTitleEl.textContent = 'Dia selecionado';
+  weeklyDayItemsListEl.innerHTML = '<p class="muted">Clique em \"Ver itens do dia\" para abrir os resumos e flashcards.</p>';
   weeklyGoalModalEl.classList.remove('hidden');
 }
 
 function closeWeeklyGoalModal() {
   weeklyGoalModalEl.classList.add('hidden');
+}
+
+async function openWeeklyDayDetails(dateStr) {
+  const res = await fetch(`/api/weekly-goal/day-details?date=${encodeURIComponent(dateStr)}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Falha ao carregar o dia.');
+    return;
+  }
+
+  const data = await res.json();
+  weeklyDayDetailTitleEl.textContent = `Dia selecionado: ${formatDate(`${data.date}T00:00:00`)}`;
+
+  if (!data.items || !data.items.length) {
+    weeklyDayItemsListEl.innerHTML = '<p class="muted">Nenhum resumo previsto para este dia.</p>';
+    return;
+  }
+
+  weeklyDayItemsListEl.innerHTML = data.items.map((item) => `
+    <article class="item">
+      <div class="item-head">
+        <strong>${escapeHtml(item.title)}</strong>
+        <small class="muted">${escapeHtml(item.paraCategory)} | ${item.flashcardsCount} flashcards</small>
+      </div>
+      <div class="item-actions">
+        <button onclick="openQuickSummary(${item.id})" class="btn-secondary">Ver/editar flashcards</button>
+      </div>
+    </article>
+  `).join('');
 }
 
 async function openQuickSummary(id) {
@@ -245,13 +293,21 @@ async function openQuickSummary(id) {
   }
 
   const data = await res.json();
+  currentQuickSummary = data;
   quickSummaryTitleEl.textContent = data.title || 'Resumo rapido';
   quickSummaryMetaEl.textContent = `PARA: ${data.paraCategory} | Proxima: ${formatDate(data.nextReviewAt)} | Status: ${data.status}`;
+  quickLociPalaceEl.value = data.lociPalace || '';
+  quickLociRoomEl.value = data.lociRoom || '';
+  quickLociHookEl.value = data.lociHook || '';
+  quickFlashcardsRawEl.value = (data.flashcards || []).map((c) => `${c.prompt}::${c.answer}`).join('\n');
 
-  const lociText = [data.lociPalace, data.lociRoom, data.lociHook].filter(Boolean).join(' -> ');
-  quickSummaryLociEl.textContent = lociText ? `Loci: ${lociText}` : 'Loci: nao configurado';
   quickSummaryCardsEl.textContent = `Flashcards: ${data.flashcardsCount}`;
+  renderQuickFlashcardsPreview(data.flashcards || []);
+  quickSummaryEditorEl.value = data.editableText ? (data.preview || '') : '';
+  quickSummaryEditorEl.disabled = !data.editableText;
+  saveQuickTextBtnEl.disabled = !data.editableText;
   quickSummaryPreviewEl.textContent = data.preview || 'Sem preview disponivel.';
+  quickSummaryPreviewEl.classList.toggle('hidden', !!data.editableText);
   quickSummaryOpenLinkEl.href = toPublicFileUrl(data.filePath);
 
   quickSummaryModalEl.classList.remove('hidden');
@@ -259,6 +315,59 @@ async function openQuickSummary(id) {
 
 function closeQuickSummaryModal() {
   quickSummaryModalEl.classList.add('hidden');
+  currentQuickSummary = null;
+}
+
+function renderQuickFlashcardsPreview(cards) {
+  if (!cards.length) {
+    quickFlashcardsPreviewEl.innerHTML = '<p class="muted">Nenhum flashcard conectado a este resumo.</p>';
+    return;
+  }
+  quickFlashcardsPreviewEl.innerHTML = cards.map((c) => `
+    <article class="item">
+      <strong>Pergunta:</strong> ${escapeHtml(c.prompt)}
+      <small class="muted"><strong>Resposta:</strong> ${escapeHtml(c.answer)}</small>
+    </article>
+  `).join('');
+}
+
+async function saveQuickMemory() {
+  if (!currentQuickSummary) return;
+  const res = await fetch(`/api/summaries/${currentQuickSummary.id}/memory`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lociPalace: quickLociPalaceEl.value,
+      lociRoom: quickLociRoomEl.value,
+      lociHook: quickLociHookEl.value,
+      flashcardsRaw: quickFlashcardsRawEl.value
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Falha ao salvar Loci/Flashcards.');
+    return;
+  }
+  await openQuickSummary(currentQuickSummary.id);
+  await refreshAll();
+}
+
+async function saveQuickText() {
+  if (!currentQuickSummary) return;
+  const res = await fetch(`/api/summaries/${currentQuickSummary.id}/text`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: quickSummaryEditorEl.value
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Falha ao salvar texto do resumo.');
+    return;
+  }
+  await openQuickSummary(currentQuickSummary.id);
+  await refreshAll();
 }
 
 function renderQueue() {
@@ -350,6 +459,10 @@ async function createSummary(event) {
     const err = await res.json();
     alert(err.error || 'Falha ao criar resumo.');
     return;
+  }
+  const created = await res.json();
+  if (Number.isFinite(created.flashcardsCount)) {
+    alert(`Resumo salvo. Flashcards reconhecidos: ${created.flashcardsCount}.`);
   }
 
   event.target.reset();
@@ -775,6 +888,10 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString('pt-BR');
 }
 
+function toDateInput(iso) {
+  return new Date(iso).toISOString().slice(0, 10);
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -797,6 +914,7 @@ window.deleteFolder = deleteFolder;
 window.resolveAlert = resolveAlert;
 window.openQuickSummary = openQuickSummary;
 window.deleteSummary = deleteSummary;
+window.openWeeklyDayDetails = openWeeklyDayDetails;
 
 async function resolveAlert(id) {
   const res = await fetch(`/api/metacog/alerts/${id}/resolve`, { method: 'POST' });
