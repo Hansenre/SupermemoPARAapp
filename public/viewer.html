@@ -48,8 +48,11 @@
         margin-top: 1.1em;
         margin-bottom: 0.45em;
       }
+      .content h1 { font-size: 1.9rem; }
+      .content h2 { font-size: 1.5rem; }
+      .content h3 { font-size: 1.25rem; }
       .content p { margin: 0.45em 0; }
-      .content ul { margin: 0.45em 0 0.45em 1.2em; }
+      .content ul, .content ol { margin: 0.45em 0 0.45em 1.2em; }
       .content pre {
         background: #0f172a;
         color: #e2e8f0;
@@ -113,28 +116,119 @@
       }
 
       function renderSimpleMarkdown(md) {
-        const blocks = String(md || '').split(/\n\n+/);
-        return blocks.map((block) => {
-          const trimmed = block.trim();
-          if (!trimmed) return '';
+        const lines = String(md || '').replace(/\r/g, '').split('\n');
+        const out = [];
+        let paragraph = [];
+        let listItems = [];
+        let orderedItems = [];
+        let codeLines = [];
+        let inFence = false;
 
-          if (trimmed.startsWith('### ')) return `<h3>${escapeHtml(trimmed.slice(4))}</h3>`;
-          if (trimmed.startsWith('## ')) return `<h2>${escapeHtml(trimmed.slice(3))}</h2>`;
-          if (trimmed.startsWith('# ')) return `<h1>${escapeHtml(trimmed.slice(2))}</h1>`;
+        const flushParagraph = () => {
+          if (!paragraph.length) return;
+          out.push(`<p>${escapeHtml(paragraph.join('\n')).replace(/\n/g, '<br/>')}</p>`);
+          paragraph = [];
+        };
+        const flushList = () => {
+          if (!listItems.length) return;
+          out.push(`<ul>${listItems.map((it) => `<li>${escapeHtml(it)}</li>`).join('')}</ul>`);
+          listItems = [];
+        };
+        const flushOrdered = () => {
+          if (!orderedItems.length) return;
+          out.push(`<ol>${orderedItems.map((it) => `<li>${escapeHtml(it)}</li>`).join('')}</ol>`);
+          orderedItems = [];
+        };
+        const flushCode = () => {
+          if (!codeLines.length) return;
+          out.push(`<pre>${escapeHtml(codeLines.join('\n'))}</pre>`);
+          codeLines = [];
+        };
+        const flushAllText = () => {
+          flushParagraph();
+          flushList();
+          flushOrdered();
+          flushCode();
+        };
 
-          if (trimmed.startsWith('- ')) {
-            const items = trimmed.split('\n').filter((l) => l.trim().startsWith('- '));
-            const li = items.map((it) => `<li>${escapeHtml(it.trim().slice(2))}</li>`).join('');
-            return `<ul>${li}</ul>`;
+        for (let i = 0; i < lines.length; i += 1) {
+          const rawLine = lines[i];
+          const line = rawLine || '';
+          const trimmed = line.trim();
+          const nextLine = i + 1 < lines.length ? (lines[i + 1] || '') : '';
+          const nextTrimmed = nextLine.trim();
+
+          if (trimmed.startsWith('```')) {
+            flushParagraph();
+            flushList();
+            flushOrdered();
+            inFence = !inFence;
+            if (!inFence) flushCode();
+            continue;
           }
 
-          if (trimmed.includes('\n') && /\{|\}|;/.test(trimmed)) {
-            return `<pre>${escapeHtml(trimmed)}</pre>`;
+          if (inFence) {
+            codeLines.push(line);
+            continue;
           }
 
-          const lineHtml = escapeHtml(trimmed).replace(/\n/g, '<br/>');
-          return `<p>${lineHtml}</p>`;
-        }).join('\n');
+          if (!trimmed) {
+            flushAllText();
+            continue;
+          }
+
+          if (/^(#{1,3})\s+/.test(trimmed)) {
+            flushAllText();
+            const level = trimmed.match(/^#{1,3}/)[0].length;
+            const text = trimmed.replace(/^#{1,3}\s+/, '');
+            out.push(`<h${level}>${escapeHtml(text)}</h${level}>`);
+            continue;
+          }
+
+          if (/^-\s+/.test(trimmed)) {
+            flushParagraph();
+            flushOrdered();
+            listItems.push(trimmed.replace(/^-\s+/, ''));
+            continue;
+          }
+
+          if (/^\d+\.\s+/.test(trimmed)) {
+            flushParagraph();
+            flushList();
+            orderedItems.push(trimmed.replace(/^\d+\.\s+/, ''));
+            continue;
+          }
+
+          if (/^\t/.test(line) || /^ {4,}/.test(line)) {
+            flushParagraph();
+            flushList();
+            flushOrdered();
+            codeLines.push(line.replace(/^\t|^ {4}/, ''));
+            continue;
+          }
+
+          // If a code signature line is followed by indented/code-like lines,
+          // keep it in the same code block (ex: "public static ... {").
+          const looksLikeCodeSignature =
+            /[{}();=]/.test(trimmed) &&
+            (/(public|private|protected|static|class|function|if|for|while|return)\b/i.test(trimmed) || trimmed.endsWith('{'));
+          const nextLooksLikeCode = /^\t/.test(nextLine) || /^ {4,}/.test(nextLine) || /[{}();=]/.test(nextTrimmed);
+          if (looksLikeCodeSignature && nextLooksLikeCode) {
+            flushParagraph();
+            flushList();
+            flushOrdered();
+            codeLines.push(trimmed);
+            continue;
+          }
+
+          flushList();
+          flushOrdered();
+          flushCode();
+          paragraph.push(trimmed);
+        }
+
+        flushAllText();
+        return out.join('\n');
       }
 
       function escapeHtml(value) {
