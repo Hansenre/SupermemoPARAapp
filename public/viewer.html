@@ -1,0 +1,150 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Visualizador de Resumo</title>
+    <style>
+      :root {
+        --bg: #f3f6fb;
+        --card: #ffffff;
+        --line: #dbe4f0;
+        --text: #10213a;
+        --muted: #5b6b80;
+        --accent: #0f766e;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Manrope", "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 18px auto;
+        padding: 0 14px 18px;
+      }
+      .head {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+      }
+      .head strong { display: block; font-size: 1.1rem; }
+      .head small { color: var(--muted); }
+      .content {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        line-height: 1.65;
+        font-size: 1.06rem;
+        overflow-wrap: anywhere;
+      }
+      .content h1, .content h2, .content h3 {
+        line-height: 1.3;
+        margin-top: 1.1em;
+        margin-bottom: 0.45em;
+      }
+      .content p { margin: 0.45em 0; }
+      .content ul { margin: 0.45em 0 0.45em 1.2em; }
+      .content pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 10px;
+        padding: 10px;
+        overflow: auto;
+        font-size: 0.95rem;
+      }
+      .plain {
+        white-space: pre-wrap;
+        font-family: "Consolas", "Courier New", monospace;
+      }
+      .alert {
+        background: #fff7ed;
+        color: #9a3412;
+        border: 1px solid #fed7aa;
+        border-radius: 10px;
+        padding: 10px;
+      }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="head">
+        <strong id="fileTitle">Resumo</strong>
+        <small id="filePath"></small>
+      </header>
+      <article id="content" class="content">Carregando...</article>
+    </main>
+
+    <script>
+      init();
+
+      async function init() {
+        const params = new URLSearchParams(window.location.search);
+        const relativePath = params.get('path') || '';
+        const contentEl = document.getElementById('content');
+
+        if (!relativePath) {
+          contentEl.innerHTML = '<div class="alert">Caminho do arquivo nao informado.</div>';
+          return;
+        }
+
+        const res = await fetch(`/api/vault/read?path=${encodeURIComponent(relativePath)}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Falha ao abrir arquivo.' }));
+          contentEl.innerHTML = `<div class="alert">${escapeHtml(err.error || 'Falha ao abrir arquivo.')}</div>`;
+          return;
+        }
+
+        const data = await res.json();
+        document.getElementById('fileTitle').textContent = data.name;
+        document.getElementById('filePath').textContent = data.relativePath;
+
+        if (data.ext === '.md') {
+          contentEl.innerHTML = renderSimpleMarkdown(data.content || '');
+        } else {
+          contentEl.innerHTML = `<div class="plain">${escapeHtml(data.content || '')}</div>`;
+        }
+      }
+
+      function renderSimpleMarkdown(md) {
+        const blocks = String(md || '').split(/\n\n+/);
+        return blocks.map((block) => {
+          const trimmed = block.trim();
+          if (!trimmed) return '';
+
+          if (trimmed.startsWith('### ')) return `<h3>${escapeHtml(trimmed.slice(4))}</h3>`;
+          if (trimmed.startsWith('## ')) return `<h2>${escapeHtml(trimmed.slice(3))}</h2>`;
+          if (trimmed.startsWith('# ')) return `<h1>${escapeHtml(trimmed.slice(2))}</h1>`;
+
+          if (trimmed.startsWith('- ')) {
+            const items = trimmed.split('\n').filter((l) => l.trim().startsWith('- '));
+            const li = items.map((it) => `<li>${escapeHtml(it.trim().slice(2))}</li>`).join('');
+            return `<ul>${li}</ul>`;
+          }
+
+          if (trimmed.includes('\n') && /\{|\}|;/.test(trimmed)) {
+            return `<pre>${escapeHtml(trimmed)}</pre>`;
+          }
+
+          const lineHtml = escapeHtml(trimmed).replace(/\n/g, '<br/>');
+          return `<p>${lineHtml}</p>`;
+        }).join('\n');
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+    </script>
+  </body>
+</html>

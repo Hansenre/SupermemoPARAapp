@@ -28,6 +28,10 @@ app.use(express.json());
 app.use(express.static(path.join(BASE_DIR, 'public')));
 app.use('/vault', express.static(VAULT_DIR));
 
+app.get('/view', (req, res) => {
+  res.sendFile(path.join(BASE_DIR, 'public', 'viewer.html'));
+});
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     try {
@@ -82,6 +86,37 @@ const uploadPara = multer({
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
+});
+
+app.get('/api/vault/read', (req, res) => {
+  try {
+    const relativePath = String(req.query.path || '').trim();
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Caminho obrigatorio.' });
+    }
+
+    const absolutePath = resolveInsideBase(VAULT_DIR, relativePath);
+    if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+      return res.status(404).json({ error: 'Arquivo nao encontrado.' });
+    }
+
+    const ext = path.extname(absolutePath).toLowerCase();
+    const textLikeExt = new Set(['.md', '.txt', '.json', '.log', '.csv']);
+    if (!textLikeExt.has(ext)) {
+      return res.status(400).json({ error: 'Visualizador suporta apenas arquivos de texto.' });
+    }
+
+    const content = fs.readFileSync(absolutePath, 'utf8');
+    res.json({
+      name: path.basename(absolutePath),
+      ext,
+      relativePath: toUnixPath(path.relative(VAULT_DIR, absolutePath)),
+      content
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao ler arquivo.' });
+  }
 });
 
 app.get('/api/dashboard', (req, res) => {
@@ -235,7 +270,7 @@ app.get('/api/review-queue', (req, res) => {
 
 app.get('/api/summaries', (req, res) => {
   const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, release_at AS releaseAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     ORDER BY created_at DESC
@@ -257,7 +292,7 @@ app.get('/api/summaries/:id/flashcards', (req, res) => {
 app.get('/api/summaries/:id/quick', (req, res) => {
   const id = Number(req.params.id);
   const summary = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, next_review_at AS nextReviewAt, status,
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, release_at AS releaseAt, next_review_at AS nextReviewAt, status,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     WHERE id = ?
@@ -380,6 +415,50 @@ app.put('/api/summaries/:id/text', (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(400).json({ error: 'Falha ao salvar texto do resumo.' });
+  }
+});
+
+app.put('/api/summaries/:id/schedule', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const summary = db.prepare('SELECT id FROM summaries WHERE id = ?').get(id);
+    if (!summary) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+
+    const postponeDaysRaw = req.body.postponeDays;
+    const nextReviewDateRaw = String(req.body.nextReviewDate || '').trim();
+    let nextReviewAt = null;
+
+    if (Number.isFinite(Number(postponeDaysRaw))) {
+      const days = Math.max(0, Math.min(365, Number(postponeDaysRaw)));
+      const current = db.prepare('SELECT next_review_at AS nextReviewAt FROM summaries WHERE id = ?').get(id);
+      const base = current?.nextReviewAt ? new Date(current.nextReviewAt) : new Date();
+      nextReviewAt = startOfDayISO(addDays(base, days));
+    }
+
+    if (nextReviewDateRaw) {
+      const parsed = parseDateOnly(nextReviewDateRaw);
+      if (!parsed) {
+        return res.status(400).json({ error: 'Data de proxima revisao invalida.' });
+      }
+      nextReviewAt = startOfDayISO(parsed);
+    }
+
+    if (!nextReviewAt) {
+      return res.status(400).json({ error: 'Informe postponeDays ou nextReviewDate.' });
+    }
+
+    db.prepare(`
+      UPDATE summaries
+      SET next_review_at = ?
+      WHERE id = ?
+    `).run(nextReviewAt, id);
+
+    res.json({ ok: true, nextReviewAt });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao atualizar agenda.' });
   }
 });
 
@@ -593,6 +672,7 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     const lociRoom = String(req.body.lociRoom || '').trim().slice(0, 160);
     const lociHook = String(req.body.lociHook || '').trim().slice(0, 500);
     const flashcardsRaw = req.body.flashcardsRaw;
+    const launchDateRaw = String(req.body.launchDate || '').trim();
 
     if (!title) {
       return res.status(400).json({ error: 'Titulo obrigatorio.' });
@@ -615,16 +695,23 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     }
 
     const created = new Date();
-    const nextReview = addDays(created, REVIEW_INTERVALS[0]);
+    const launchDate = launchDateRaw ? parseDateOnly(launchDateRaw) : null;
+    if (launchDateRaw && !launchDate) {
+      return res.status(400).json({ error: 'Data de lancamento invalida.' });
+    }
+
+    const baseForSchedule = launchDate || created;
+    const nextReview = addDays(baseForSchedule, REVIEW_INTERVALS[0]);
 
     const result = db.prepare(`
-      INSERT INTO summaries (title, para_category, file_path, created_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
-      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      INSERT INTO summaries (title, para_category, file_path, created_at, release_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
     `).run(
       title,
       para,
       filePath,
       created.toISOString(),
+      launchDate ? startOfDayISO(launchDate) : startOfDayISO(created),
       0,
       startOfDayISO(nextReview),
       lociPalace || null,
@@ -800,6 +887,7 @@ function initDb() {
       para_category TEXT NOT NULL,
       file_path TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      release_at TEXT,
       current_step INTEGER NOT NULL DEFAULT 0,
       next_review_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
@@ -852,6 +940,7 @@ function initDb() {
   ensureColumn('summaries', 'loci_palace', 'TEXT');
   ensureColumn('summaries', 'loci_room', 'TEXT');
   ensureColumn('summaries', 'loci_hook', 'TEXT');
+  ensureColumn('summaries', 'release_at', 'TEXT');
 }
 
 function normalizePara(value) {
@@ -986,6 +1075,15 @@ function isInsideBase(baseDir, targetPath) {
 
 function toUnixPath(value) {
   return String(value || '').replace(/\\/g, '/');
+}
+
+function parseDateOnly(value) {
+  const clean = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    return null;
+  }
+  const d = new Date(`${clean}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function listFoldersRecursive(baseDir, maxDepth) {

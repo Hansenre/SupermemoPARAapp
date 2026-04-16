@@ -76,6 +76,9 @@ const quickSummaryMetaEl = document.getElementById('quickSummaryMeta');
 const quickSummaryCardsEl = document.getElementById('quickSummaryCards');
 const quickSummaryPreviewEl = document.getElementById('quickSummaryPreview');
 const quickSummaryOpenLinkEl = document.getElementById('quickSummaryOpenLink');
+const quickNextReviewDateEl = document.getElementById('quickNextReviewDate');
+const quickPostponeDaysEl = document.getElementById('quickPostponeDays');
+const saveQuickScheduleBtnEl = document.getElementById('saveQuickScheduleBtn');
 const quickLociPalaceEl = document.getElementById('quickLociPalace');
 const quickLociRoomEl = document.getElementById('quickLociRoom');
 const quickLociHookEl = document.getElementById('quickLociHook');
@@ -107,6 +110,7 @@ async function init() {
   closeQuickSummaryModalBtnEl.addEventListener('click', closeQuickSummaryModal);
   saveQuickMemoryBtnEl.addEventListener('click', saveQuickMemory);
   saveQuickTextBtnEl.addEventListener('click', saveQuickText);
+  saveQuickScheduleBtnEl.addEventListener('click', saveQuickSchedule);
   summaryParaCategoryEl.addEventListener('change', refreshSummarySavedFoldersSelector);
   summaryUseSavedFolderBtnEl.addEventListener('click', applySavedSummaryFolder);
 
@@ -198,7 +202,7 @@ async function refreshLibrary() {
   }
 
   libraryEl.innerHTML = data.map((item) => {
-    const fileHref = toPublicFileUrl(item.filePath);
+    const fileHref = toOpenFileUrl(item.filePath);
     return `
       <article class="item">
         <div class="item-head">
@@ -206,10 +210,12 @@ async function refreshLibrary() {
           <small>${item.status}</small>
         </div>
         <small class="muted">PARA: ${item.paraCategory} | Proxima: ${formatDate(item.nextReviewAt)}</small>
+        ${item.releaseAt ? `<small class="muted">Lancamento: ${formatDate(item.releaseAt)}</small>` : ''}
         ${(item.lociPalace || item.lociRoom || item.lociHook) ? `<small class="muted">Loci: ${escapeHtml([item.lociPalace, item.lociRoom, item.lociHook].filter(Boolean).join(' - '))}</small>` : ''}
         <div class="item-actions">
           <a href="${fileHref}" target="_blank" rel="noreferrer">Abrir</a>
           <button onclick="openQuickSummary(${item.id})" class="btn-secondary">Resumo rapido</button>
+          <button onclick="postponeSummary(${item.id})" class="btn-secondary">Postergar</button>
           <button onclick="deleteSummary(${item.id})" class="btn-danger">Excluir</button>
           ${item.status === 'active' ? `<button onclick="archiveSummary(${item.id})" class="btn-danger">Arquivar</button>` : ''}
         </div>
@@ -295,7 +301,9 @@ async function openQuickSummary(id) {
   const data = await res.json();
   currentQuickSummary = data;
   quickSummaryTitleEl.textContent = data.title || 'Resumo rapido';
-  quickSummaryMetaEl.textContent = `PARA: ${data.paraCategory} | Proxima: ${formatDate(data.nextReviewAt)} | Status: ${data.status}`;
+  quickSummaryMetaEl.textContent = `PARA: ${data.paraCategory} | Proxima: ${formatDate(data.nextReviewAt)} | Lancamento: ${formatDate(data.releaseAt || data.createdAt)} | Status: ${data.status}`;
+  quickNextReviewDateEl.value = toDateInput(data.nextReviewAt);
+  quickPostponeDaysEl.value = '';
   quickLociPalaceEl.value = data.lociPalace || '';
   quickLociRoomEl.value = data.lociRoom || '';
   quickLociHookEl.value = data.lociHook || '';
@@ -308,7 +316,7 @@ async function openQuickSummary(id) {
   saveQuickTextBtnEl.disabled = !data.editableText;
   quickSummaryPreviewEl.textContent = data.preview || 'Sem preview disponivel.';
   quickSummaryPreviewEl.classList.toggle('hidden', !!data.editableText);
-  quickSummaryOpenLinkEl.href = toPublicFileUrl(data.filePath);
+  quickSummaryOpenLinkEl.href = toOpenFileUrl(data.filePath);
 
   quickSummaryModalEl.classList.remove('hidden');
 }
@@ -370,6 +378,62 @@ async function saveQuickText() {
   await refreshAll();
 }
 
+async function saveQuickSchedule() {
+  if (!currentQuickSummary) return;
+
+  const payload = {};
+  const dateValue = String(quickNextReviewDateEl.value || '').trim();
+  const postponeRaw = String(quickPostponeDaysEl.value || '').trim();
+
+  if (dateValue) payload.nextReviewDate = dateValue;
+  if (postponeRaw !== '') payload.postponeDays = Number(postponeRaw);
+
+  if (!('nextReviewDate' in payload) && !('postponeDays' in payload)) {
+    alert('Informe uma data de proxima revisao ou dias para postergar.');
+    return;
+  }
+
+  const res = await fetch(`/api/summaries/${currentQuickSummary.id}/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Falha ao salvar agenda.');
+    return;
+  }
+
+  await openQuickSummary(currentQuickSummary.id);
+  await refreshAll();
+}
+
+async function postponeSummary(id) {
+  const raw = prompt('Postergar este resumo em quantos dias?', '1');
+  if (raw === null) return;
+
+  const days = Number(raw);
+  if (!Number.isFinite(days) || days < 0) {
+    alert('Informe um numero de dias valido.');
+    return;
+  }
+
+  const res = await fetch(`/api/summaries/${id}/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ postponeDays: Math.round(days) })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Falha ao postergar.');
+    return;
+  }
+
+  await refreshAll();
+}
+
 function renderQueue() {
   if (!state.queue.length) {
     queueEl.innerHTML = '<p class="muted">Sem revisoes pendentes hoje.</p>';
@@ -403,7 +467,7 @@ async function showPopup(item) {
 
   modalTitleEl.textContent = item.title;
   modalMetaEl.textContent = `PARA: ${item.paraCategory} | Etapa: ${item.currentStep + 1}/4`;
-  modalOpenFileEl.href = toPublicFileUrl(item.filePath);
+  modalOpenFileEl.href = toOpenFileUrl(item.filePath);
   recallNoteEl.value = '';
   confidenceInputEl.value = 50;
   confidenceValueEl.textContent = '50%';
@@ -656,7 +720,9 @@ async function loadParaFolder() {
       continue;
     }
 
-    const fileUrl = toVaultUrl(data.category, entry.relativePath);
+    const fileUrl = entry.editable
+      ? toViewerUrl(`${PARA_FOLDER_MAP[data.category]}/${entry.relativePath}`)
+      : toVaultUrl(data.category, entry.relativePath);
     lines.push(`
       <article class="item">
         <div class="item-head"><strong>${escapeHtml(entry.name)}</strong><small>${entry.editable ? 'Editavel' : 'Somente leitura'}</small></div>
@@ -873,6 +939,24 @@ function toPublicFileUrl(fullPath) {
   return `/vault/${normalized.slice(idx + marker.length)}`;
 }
 
+function toOpenFileUrl(fullPath) {
+  const normalized = String(fullPath || '').replaceAll('\\\\', '/').replaceAll('\\', '/');
+  const marker = '/KnowledgeOSVault/';
+  const idx = normalized.indexOf(marker);
+  if (idx === -1) return '#';
+
+  const relative = normalized.slice(idx + marker.length);
+  const ext = (relative.split('.').pop() || '').toLowerCase();
+  if (ext === 'md' || ext === 'txt') {
+    return toViewerUrl(relative);
+  }
+  return `/vault/${relative}`;
+}
+
+function toViewerUrl(relativePath) {
+  return `/view?path=${encodeURIComponent(relativePath)}`;
+}
+
 function toVaultUrl(category, relativePath) {
   const folder = PARA_FOLDER_MAP[category] || 'Resources';
   return `/vault/${folder}/${relativePath}`;
@@ -915,6 +999,7 @@ window.resolveAlert = resolveAlert;
 window.openQuickSummary = openQuickSummary;
 window.deleteSummary = deleteSummary;
 window.openWeeklyDayDetails = openWeeklyDayDetails;
+window.postponeSummary = postponeSummary;
 
 async function resolveAlert(id) {
   const res = await fetch(`/api/metacog/alerts/${id}/resolve`, { method: 'POST' });

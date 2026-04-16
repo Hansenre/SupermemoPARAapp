@@ -71,6 +71,9 @@
           <label>Nome do arquivo</label>
           <input name="fileName" placeholder="ex: resumo_aula_03" maxlength="120" />
 
+          <label>Data de lancamento (opcional)</label>
+          <input type="date" name="launchDate" />
+
           <div class="memory-box">
             <h3>Loci (Palacio da Memoria)</h3>
             <input name="lociPalace" placeholder="Palacio (ex: Minha casa)" maxlength="160" />
@@ -225,6 +228,18 @@
         </div>
         <p id="quickSummaryMeta" class="muted"></p>
         <p class="muted">Flashcards tambem aparecem no pop-up de Revisao (etapa 2).</p>
+
+        <div class="grid-two">
+          <div>
+            <label>Proxima revisao</label>
+            <input id="quickNextReviewDate" type="date" />
+          </div>
+          <div>
+            <label>Postergar (dias)</label>
+            <input id="quickPostponeDays" type="number" min="0" max="365" step="1" placeholder="ex: 2" />
+          </div>
+        </div>
+        <button id="saveQuickScheduleBtn" type="button" class="btn-secondary">Salvar agenda</button>
 
         <div class="memory-box">
           <h3>Loci do resumo</h3>
