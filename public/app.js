@@ -91,6 +91,11 @@ const summaryParaCategoryEl = document.getElementById('summaryParaCategory');
 const summaryFolderNameEl = document.getElementById('summaryFolderName');
 const summarySavedFoldersSelectEl = document.getElementById('summarySavedFoldersSelect');
 const summaryUseSavedFolderBtnEl = document.getElementById('summaryUseSavedFolderBtn');
+const createBackupBtnEl = document.getElementById('createBackupBtn');
+const refreshBackupsBtnEl = document.getElementById('refreshBackupsBtn');
+const restoreBackupBtnEl = document.getElementById('restoreBackupBtn');
+const backupSelectEl = document.getElementById('backupSelect');
+const backupStatusEl = document.getElementById('backupStatus');
 let currentQuickSummary = null;
 
 init();
@@ -113,6 +118,9 @@ async function init() {
   saveQuickScheduleBtnEl.addEventListener('click', saveQuickSchedule);
   summaryParaCategoryEl.addEventListener('change', refreshSummarySavedFoldersSelector);
   summaryUseSavedFolderBtnEl.addEventListener('click', applySavedSummaryFolder);
+  createBackupBtnEl.addEventListener('click', createBackup);
+  refreshBackupsBtnEl.addEventListener('click', refreshBackupsList);
+  restoreBackupBtnEl.addEventListener('click', restoreSelectedBackup);
 
   document.getElementById('browseBtn').addEventListener('click', () => {
     state.browsing.category = browserCategoryEl.value;
@@ -136,6 +144,7 @@ async function init() {
 
   await refreshAll();
   await refreshSummarySavedFoldersSelector();
+  await refreshBackupsList();
 
   setInterval(async () => {
     await refreshQueue();
@@ -148,6 +157,73 @@ async function refreshAll() {
   await refreshSavedFoldersSelector();
   await loadParaFolder();
   openPopupIfNeeded();
+}
+
+async function refreshBackupsList() {
+  const res = await fetch('/api/backup/list');
+  if (!res.ok) {
+    backupStatusEl.textContent = 'Falha ao carregar backups.';
+    return;
+  }
+
+  const backups = await res.json();
+  backupSelectEl.innerHTML = '';
+  if (!backups.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Nenhum backup';
+    backupSelectEl.appendChild(opt);
+    backupStatusEl.textContent = 'Nenhum backup criado ainda.';
+    return;
+  }
+
+  for (const b of backups) {
+    const opt = document.createElement('option');
+    opt.value = b.id;
+    opt.textContent = `${b.id} (${formatDateTime(b.createdAt)})`;
+    backupSelectEl.appendChild(opt);
+  }
+
+  backupStatusEl.textContent = `${backups.length} backup(s) disponivel(is).`;
+}
+
+async function createBackup() {
+  const res = await fetch('/api/backup/create', { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    backupStatusEl.textContent = err.error || 'Falha ao criar backup.';
+    return;
+  }
+  const data = await res.json();
+  backupStatusEl.textContent = `Backup criado: ${data.id}`;
+  await refreshBackupsList();
+}
+
+async function restoreSelectedBackup() {
+  const id = backupSelectEl.value;
+  if (!id) {
+    alert('Escolha um backup na lista.');
+    return;
+  }
+
+  if (!confirm(`Restaurar backup ${id}? Isso substitui os dados atuais do banco.`)) {
+    return;
+  }
+
+  const res = await fetch('/api/backup/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    backupStatusEl.textContent = err.error || 'Falha ao restaurar backup.';
+    return;
+  }
+
+  backupStatusEl.textContent = `Backup restaurado: ${id}`;
+  await refreshAll();
 }
 
 async function refreshDashboard() {
@@ -970,6 +1046,10 @@ function getParentPath(currentPath) {
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('pt-BR');
+}
+
+function formatDateTime(iso) {
+  return new Date(iso).toLocaleString('pt-BR');
 }
 
 function toDateInput(iso) {

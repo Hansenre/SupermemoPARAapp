@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 5050;
 const BASE_DIR = __dirname;
 const DATA_DIR = path.join(BASE_DIR, 'data');
 const DB_PATH = path.join(DATA_DIR, 'app.db');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const VAULT_DIR = path.join(BASE_DIR, 'KnowledgeOSVault');
 const PARA_MAP = {
   inbox: 'Inbox',
@@ -86,6 +87,77 @@ const uploadPara = multer({
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
+});
+
+app.get('/api/backup/list', (req, res) => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      return res.json([]);
+    }
+
+    const entries = fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.startsWith('backup_'))
+      .map((d) => {
+        const dir = path.join(BACKUP_DIR, d.name);
+        const exportPath = path.join(dir, 'export.json');
+        const dbCopyPath = path.join(dir, 'app.db');
+        const stat = fs.statSync(dir);
+        return {
+          id: d.name,
+          createdAt: stat.mtime.toISOString(),
+          hasExport: fs.existsSync(exportPath),
+          hasDbCopy: fs.existsSync(dbCopyPath)
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json(entries);
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao listar backups.' });
+  }
+});
+
+app.post('/api/backup/create', (req, res) => {
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupId = `backup_${stamp}`;
+    const dir = path.join(BACKUP_DIR, backupId);
+    fs.mkdirSync(dir, { recursive: true });
+
+    const exportData = buildLogicalExport();
+    fs.writeFileSync(path.join(dir, 'export.json'), JSON.stringify(exportData, null, 2), 'utf8');
+    fs.copyFileSync(DB_PATH, path.join(dir, 'app.db'));
+
+    res.status(201).json({ ok: true, id: backupId });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao criar backup.' });
+  }
+});
+
+app.post('/api/backup/restore', (req, res) => {
+  try {
+    const id = String(req.body.id || '').trim();
+    if (!id || !id.startsWith('backup_')) {
+      return res.status(400).json({ error: 'Backup invalido.' });
+    }
+
+    const dir = path.join(BACKUP_DIR, id);
+    const exportPath = path.join(dir, 'export.json');
+    if (!fs.existsSync(exportPath)) {
+      return res.status(404).json({ error: 'Arquivo export.json nao encontrado no backup.' });
+    }
+
+    const raw = fs.readFileSync(exportPath, 'utf8');
+    const payload = JSON.parse(raw);
+    restoreLogicalExport(payload);
+
+    res.json({ ok: true, id });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao restaurar backup.' });
+  }
 });
 
 app.get('/api/vault/read', (req, res) => {
@@ -867,6 +939,9 @@ function ensureDirs() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
+  if (!fs.existsSync(BACKUP_DIR)) {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  }
   if (!fs.existsSync(VAULT_DIR)) {
     fs.mkdirSync(VAULT_DIR, { recursive: true });
   }
@@ -1271,4 +1346,72 @@ function ensureColumn(tableName, columnName, columnType) {
   if (!exists) {
     db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
   }
+}
+
+function buildLogicalExport() {
+  return {
+    exportedAt: new Date().toISOString(),
+    summaries: db.prepare('SELECT * FROM summaries ORDER BY id ASC').all(),
+    reviews: db.prepare('SELECT * FROM reviews ORDER BY id ASC').all(),
+    flashcards: db.prepare('SELECT * FROM flashcards ORDER BY id ASC').all(),
+    metacogAlerts: db.prepare('SELECT * FROM metacog_alerts ORDER BY id ASC').all()
+  };
+}
+
+function restoreLogicalExport(payload) {
+  const summaries = Array.isArray(payload?.summaries) ? payload.summaries : [];
+  const reviews = Array.isArray(payload?.reviews) ? payload.reviews : [];
+  const flashcards = Array.isArray(payload?.flashcards) ? payload.flashcards : [];
+  const metacogAlerts = Array.isArray(payload?.metacogAlerts) ? payload.metacogAlerts : [];
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM metacog_alerts').run();
+    db.prepare('DELETE FROM flashcards').run();
+    db.prepare('DELETE FROM reviews').run();
+    db.prepare('DELETE FROM summaries').run();
+
+    const insertSummary = db.prepare(`
+      INSERT INTO summaries (
+        id, title, para_category, file_path, created_at, release_at, current_step,
+        next_review_at, status, last_grade, loci_palace, loci_room, loci_hook
+      ) VALUES (
+        @id, @title, @para_category, @file_path, @created_at, @release_at, @current_step,
+        @next_review_at, @status, @last_grade, @loci_palace, @loci_room, @loci_hook
+      )
+    `);
+    for (const row of summaries) {
+      insertSummary.run(row);
+    }
+
+    const insertReview = db.prepare(`
+      INSERT INTO reviews (
+        id, summary_id, reviewed_at, grade, resulting_step, next_review_at,
+        confidence, recall_note, recall_seconds, adaptive_days, is_illusion
+      ) VALUES (
+        @id, @summary_id, @reviewed_at, @grade, @resulting_step, @next_review_at,
+        @confidence, @recall_note, @recall_seconds, @adaptive_days, @is_illusion
+      )
+    `);
+    for (const row of reviews) {
+      insertReview.run(row);
+    }
+
+    const insertFlashcard = db.prepare(`
+      INSERT INTO flashcards (id, summary_id, prompt, answer, created_at)
+      VALUES (@id, @summary_id, @prompt, @answer, @created_at)
+    `);
+    for (const row of flashcards) {
+      insertFlashcard.run(row);
+    }
+
+    const insertAlert = db.prepare(`
+      INSERT INTO metacog_alerts (id, summary_id, review_id, title, message, created_at, resolved_at)
+      VALUES (@id, @summary_id, @review_id, @title, @message, @created_at, @resolved_at)
+    `);
+    for (const row of metacogAlerts) {
+      insertAlert.run(row);
+    }
+  });
+
+  tx();
 }
