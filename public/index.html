@@ -25,7 +25,7 @@
           <span>Ativos</span>
           <strong id="activeTotal">0</strong>
         </article>
-        <article class="stat-pill">
+        <article class="stat-pill clickable" id="weeklyGoalCard">
           <span>Meta semanal</span>
           <strong id="weeklyGoalStat">0/0</strong>
         </article>
@@ -113,6 +113,12 @@
         </div>
 
         <div class="toolbar compact">
+          <select id="savedFoldersSelect"></select>
+          <button id="openSavedFolderBtn" type="button" class="btn-secondary">Abrir pasta salva</button>
+          <div></div>
+        </div>
+
+        <div class="toolbar compact">
           <input id="newFolderName" placeholder="Nova subpasta" />
           <button id="createFolderBtn" type="button" class="btn-secondary">Criar pasta</button>
           <button id="deleteFolderBtn" type="button" class="btn-danger">Excluir pasta atual (vazia)</button>
@@ -182,6 +188,35 @@
             <button data-grade="forgot">Esqueci</button>
           </div>
         </section>
+      </div>
+    </div>
+
+    <div id="weeklyGoalModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Detalhes da Meta Semanal</h3>
+          <button id="closeWeeklyGoalModalBtn" type="button" class="btn-secondary">Fechar</button>
+        </div>
+        <p id="weeklyGoalSummary" class="muted"></p>
+        <div id="weeklyGoalDailyList" class="list"></div>
+        <h4>Foco sugerido (7 dias)</h4>
+        <div id="weeklyGoalFocusList" class="list"></div>
+      </div>
+    </div>
+
+    <div id="quickSummaryModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="quickSummaryTitle">Resumo rapido</h3>
+          <button id="closeQuickSummaryModalBtn" type="button" class="btn-secondary">Fechar</button>
+        </div>
+        <p id="quickSummaryMeta" class="muted"></p>
+        <p id="quickSummaryLoci" class="muted"></p>
+        <p id="quickSummaryCards" class="muted"></p>
+        <pre id="quickSummaryPreview" class="preview-box"></pre>
+        <div class="item-actions">
+          <a id="quickSummaryOpenLink" target="_blank" rel="noreferrer">Abrir arquivo</a>
+        </div>
       </div>
     </div>
 

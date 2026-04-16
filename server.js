@@ -121,6 +121,53 @@ app.get('/api/weekly-goal', (req, res) => {
   res.json(weeklyGoal);
 });
 
+app.get('/api/weekly-goal/details', (req, res) => {
+  const now = new Date();
+  const weekStart = startOfWeek(now);
+  const weeklyGoal = computeWeeklyGoal(now);
+  const dailyPlan = [];
+
+  for (let i = 0; i < 7; i += 1) {
+    const dayStart = addDays(weekStart, i);
+    const dayEnd = addDays(dayStart, 1);
+    const dueCount = db.prepare(`
+      SELECT COUNT(*) AS total
+      FROM summaries
+      WHERE status = 'active' AND next_review_at >= ? AND next_review_at < ?
+    `).get(dayStart.toISOString(), dayEnd.toISOString()).total;
+
+    dailyPlan.push({
+      date: dayStart.toISOString(),
+      target: weeklyGoal.dailyTarget,
+      dueCount
+    });
+  }
+
+  const focusCategories = db.prepare(`
+    SELECT para_category AS paraCategory, COUNT(*) AS total
+    FROM summaries
+    WHERE status = 'active' AND next_review_at <= ?
+    GROUP BY para_category
+    ORDER BY total DESC
+    LIMIT 3
+  `).all(addDays(now, 7).toISOString());
+
+  const todayFocusItems = db.prepare(`
+    SELECT id, title, para_category AS paraCategory, next_review_at AS nextReviewAt
+    FROM summaries
+    WHERE status = 'active' AND next_review_at <= ?
+    ORDER BY next_review_at ASC
+    LIMIT 12
+  `).all(startOfDayISO(now));
+
+  res.json({
+    weeklyGoal,
+    dailyPlan,
+    focusCategories,
+    todayFocusItems
+  });
+});
+
 app.get('/api/metacog/alerts', (req, res) => {
   const rows = db.prepare(`
     SELECT id, summary_id AS summaryId, review_id AS reviewId, title, message, created_at AS createdAt
@@ -176,6 +223,62 @@ app.get('/api/summaries/:id/flashcards', (req, res) => {
   res.json(cards);
 });
 
+app.get('/api/summaries/:id/quick', (req, res) => {
+  const id = Number(req.params.id);
+  const summary = db.prepare(`
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, next_review_at AS nextReviewAt, status,
+           loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
+    FROM summaries
+    WHERE id = ?
+  `).get(id);
+
+  if (!summary) {
+    return res.status(404).json({ error: 'Resumo nao encontrado.' });
+  }
+
+  const flashcardsCount = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM flashcards
+    WHERE summary_id = ?
+  `).get(id).total;
+
+  let preview = '';
+  let previewType = 'text';
+  let fileSize = null;
+  let fileUpdatedAt = null;
+
+  if (summary.filePath && fs.existsSync(summary.filePath)) {
+    const stat = fs.statSync(summary.filePath);
+    fileSize = stat.size;
+    fileUpdatedAt = stat.mtime.toISOString();
+
+    const ext = path.extname(summary.filePath).toLowerCase();
+    if (['.md', '.txt'].includes(ext)) {
+      const content = fs.readFileSync(summary.filePath, 'utf8');
+      preview = content.slice(0, 1200);
+      previewType = 'text';
+    } else if (ext === '.pdf') {
+      preview = 'Arquivo PDF detectado. Use "Abrir" para visualizar o conteudo completo.';
+      previewType = 'pdf';
+    } else {
+      preview = `Arquivo ${ext || 'sem extensao'} detectado. Use "Abrir" para visualizar o conteudo completo.`;
+      previewType = 'binary';
+    }
+  } else {
+    preview = 'Arquivo nao localizado no caminho salvo.';
+    previewType = 'missing';
+  }
+
+  res.json({
+    ...summary,
+    flashcardsCount,
+    preview,
+    previewType,
+    fileSize,
+    fileUpdatedAt
+  });
+});
+
 app.get('/api/para/browse', (req, res) => {
   try {
     const para = normalizePara(req.query.category || 'resources');
@@ -217,6 +320,23 @@ app.get('/api/para/browse', (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(400).json({ error: 'Falha ao listar pasta PARA.' });
+  }
+});
+
+app.get('/api/para/folders', (req, res) => {
+  try {
+    const para = normalizePara(req.query.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const requestedDepth = Number(req.query.maxDepth);
+    const maxDepth = Number.isFinite(requestedDepth)
+      ? clamp(Math.floor(requestedDepth), 1, 10)
+      : 6;
+
+    const folders = listFoldersRecursive(baseDir, maxDepth);
+    res.json({ category: para, folders });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao listar pastas salvas.' });
   }
 });
 
@@ -723,6 +843,36 @@ function isInsideBase(baseDir, targetPath) {
 
 function toUnixPath(value) {
   return String(value || '').replace(/\\/g, '/');
+}
+
+function listFoldersRecursive(baseDir, maxDepth) {
+  const results = [];
+
+  function walk(currentDir, depth) {
+    if (depth > maxDepth) {
+      return;
+    }
+
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const absolutePath = path.join(currentDir, entry.name);
+      const relativePath = toUnixPath(path.relative(baseDir, absolutePath));
+      results.push({
+        name: entry.name,
+        relativePath
+      });
+
+      walk(absolutePath, depth + 1);
+    }
+  }
+
+  walk(baseDir, 1);
+  results.sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'pt-BR'));
+  return results;
 }
 
 function isIllusionOfCompetence(grade, confidence) {

@@ -24,6 +24,7 @@ const libraryEl = document.getElementById('library');
 const dueTodayEl = document.getElementById('dueToday');
 const activeTotalEl = document.getElementById('activeTotal');
 const weeklyGoalStatEl = document.getElementById('weeklyGoalStat');
+const weeklyGoalCardEl = document.getElementById('weeklyGoalCard');
 const paraBreakdownEl = document.getElementById('paraBreakdown');
 const cognitiveLoadTextEl = document.getElementById('cognitiveLoadText');
 const alertsCountTextEl = document.getElementById('alertsCountText');
@@ -35,6 +36,7 @@ const modalOpenFileEl = document.getElementById('modalOpenFile');
 const browserCategoryEl = document.getElementById('browserCategory');
 const browserPathEl = document.getElementById('browserPath');
 const browserListEl = document.getElementById('browserList');
+const savedFoldersSelectEl = document.getElementById('savedFoldersSelect');
 const editingFileEl = document.getElementById('editingFile');
 const fileEditorEl = document.getElementById('fileEditor');
 const newFolderNameEl = document.getElementById('newFolderName');
@@ -60,6 +62,19 @@ const flashcardPromptEl = document.getElementById('flashcardPrompt');
 const flashcardAnswerEl = document.getElementById('flashcardAnswer');
 const showFlashcardAnswerBtnEl = document.getElementById('showFlashcardAnswerBtn');
 const nextFlashcardBtnEl = document.getElementById('nextFlashcardBtn');
+const weeklyGoalModalEl = document.getElementById('weeklyGoalModal');
+const closeWeeklyGoalModalBtnEl = document.getElementById('closeWeeklyGoalModalBtn');
+const weeklyGoalSummaryEl = document.getElementById('weeklyGoalSummary');
+const weeklyGoalDailyListEl = document.getElementById('weeklyGoalDailyList');
+const weeklyGoalFocusListEl = document.getElementById('weeklyGoalFocusList');
+const quickSummaryModalEl = document.getElementById('quickSummaryModal');
+const closeQuickSummaryModalBtnEl = document.getElementById('closeQuickSummaryModalBtn');
+const quickSummaryTitleEl = document.getElementById('quickSummaryTitle');
+const quickSummaryMetaEl = document.getElementById('quickSummaryMeta');
+const quickSummaryLociEl = document.getElementById('quickSummaryLoci');
+const quickSummaryCardsEl = document.getElementById('quickSummaryCards');
+const quickSummaryPreviewEl = document.getElementById('quickSummaryPreview');
+const quickSummaryOpenLinkEl = document.getElementById('quickSummaryOpenLink');
 
 init();
 
@@ -73,6 +88,9 @@ async function init() {
   toGradeBtnEl.addEventListener('click', () => setReviewStep(3));
   showFlashcardAnswerBtnEl.addEventListener('click', showFlashcardAnswer);
   nextFlashcardBtnEl.addEventListener('click', nextFlashcard);
+  weeklyGoalCardEl.addEventListener('click', openWeeklyGoalDetails);
+  closeWeeklyGoalModalBtnEl.addEventListener('click', closeWeeklyGoalModal);
+  closeQuickSummaryModalBtnEl.addEventListener('click', closeQuickSummaryModal);
 
   document.getElementById('browseBtn').addEventListener('click', () => {
     state.browsing.category = browserCategoryEl.value;
@@ -84,6 +102,7 @@ async function init() {
     state.browsing.category = browserCategoryEl.value;
     state.browsing.path = '';
     browserPathEl.value = '';
+    refreshSavedFoldersSelector();
     loadParaFolder();
   });
 
@@ -91,6 +110,7 @@ async function init() {
   document.getElementById('deleteFolderBtn').addEventListener('click', deleteCurrentFolder);
   document.getElementById('uploadBtn').addEventListener('click', uploadToCurrentFolder);
   document.getElementById('saveFileBtn').addEventListener('click', saveEditingFile);
+  document.getElementById('openSavedFolderBtn').addEventListener('click', openSavedFolder);
 
   await refreshAll();
 
@@ -102,6 +122,7 @@ async function init() {
 
 async function refreshAll() {
   await Promise.all([refreshDashboard(), refreshQueue(), refreshLibrary(), refreshAlerts()]);
+  await refreshSavedFoldersSelector();
   await loadParaFolder();
   openPopupIfNeeded();
 }
@@ -169,11 +190,67 @@ async function refreshLibrary() {
         ${(item.lociPalace || item.lociRoom || item.lociHook) ? `<small class="muted">Loci: ${escapeHtml([item.lociPalace, item.lociRoom, item.lociHook].filter(Boolean).join(' - '))}</small>` : ''}
         <div class="item-actions">
           <a href="${fileHref}" target="_blank" rel="noreferrer">Abrir</a>
+          <button onclick="openQuickSummary(${item.id})" class="btn-secondary">Resumo rapido</button>
           ${item.status === 'active' ? `<button onclick="archiveSummary(${item.id})" class="btn-danger">Arquivar</button>` : ''}
         </div>
       </article>
     `;
   }).join('');
+}
+
+async function openWeeklyGoalDetails() {
+  const res = await fetch('/api/weekly-goal/details');
+  if (!res.ok) {
+    alert('Falha ao carregar detalhes da meta semanal.');
+    return;
+  }
+
+  const data = await res.json();
+  weeklyGoalSummaryEl.textContent = `Meta: ${data.weeklyGoal.reviewedThisWeek}/${data.weeklyGoal.targetReviews} | Alvo diario: ${data.weeklyGoal.dailyTarget} | Carga: ${data.weeklyGoal.cognitiveLoad}`;
+
+  weeklyGoalDailyListEl.innerHTML = (data.dailyPlan || []).map((day) => `
+    <article class="item">
+      <strong>${formatDate(day.date)}</strong>
+      <small class="muted">Meta: ${day.target} | Previstas: ${day.dueCount}</small>
+    </article>
+  `).join('') || '<p class="muted">Sem dados diarios.</p>';
+
+  weeklyGoalFocusListEl.innerHTML = (data.focusCategories || []).map((cat) => `
+    <article class="item">
+      <strong>${escapeHtml(cat.paraCategory)}</strong>
+      <small class="muted">${cat.total} revisoes previstas</small>
+    </article>
+  `).join('') || '<p class="muted">Sem foco definido.</p>';
+
+  weeklyGoalModalEl.classList.remove('hidden');
+}
+
+function closeWeeklyGoalModal() {
+  weeklyGoalModalEl.classList.add('hidden');
+}
+
+async function openQuickSummary(id) {
+  const res = await fetch(`/api/summaries/${id}/quick`);
+  if (!res.ok) {
+    alert('Falha ao carregar resumo rapido.');
+    return;
+  }
+
+  const data = await res.json();
+  quickSummaryTitleEl.textContent = data.title || 'Resumo rapido';
+  quickSummaryMetaEl.textContent = `PARA: ${data.paraCategory} | Proxima: ${formatDate(data.nextReviewAt)} | Status: ${data.status}`;
+
+  const lociText = [data.lociPalace, data.lociRoom, data.lociHook].filter(Boolean).join(' -> ');
+  quickSummaryLociEl.textContent = lociText ? `Loci: ${lociText}` : 'Loci: nao configurado';
+  quickSummaryCardsEl.textContent = `Flashcards: ${data.flashcardsCount}`;
+  quickSummaryPreviewEl.textContent = data.preview || 'Sem preview disponivel.';
+  quickSummaryOpenLinkEl.href = toPublicFileUrl(data.filePath);
+
+  quickSummaryModalEl.classList.remove('hidden');
+}
+
+function closeQuickSummaryModal() {
+  quickSummaryModalEl.classList.add('hidden');
 }
 
 function renderQueue() {
@@ -377,6 +454,7 @@ async function loadParaFolder() {
   state.browsing.path = data.currentPath || '';
   browserCategoryEl.value = data.category;
   browserPathEl.value = data.currentPath || '';
+  syncSavedFolderSelect(data.currentPath || '');
 
   const lines = [];
   if (data.currentPath) {
@@ -411,6 +489,46 @@ async function loadParaFolder() {
   }
 
   browserListEl.innerHTML = lines.join('') || '<p class="muted">Pasta vazia.</p>';
+}
+
+async function refreshSavedFoldersSelector() {
+  const params = new URLSearchParams({
+    category: state.browsing.category,
+    maxDepth: '8'
+  });
+  const res = await fetch(`/api/para/folders?${params.toString()}`);
+  if (!res.ok) {
+    savedFoldersSelectEl.innerHTML = '<option value="">Raiz da categoria</option>';
+    return;
+  }
+
+  const data = await res.json();
+  savedFoldersSelectEl.innerHTML = '';
+
+  const rootOpt = document.createElement('option');
+  rootOpt.value = '';
+  rootOpt.textContent = 'Raiz da categoria';
+  savedFoldersSelectEl.appendChild(rootOpt);
+
+  for (const folder of data.folders || []) {
+    const opt = document.createElement('option');
+    opt.value = folder.relativePath;
+    opt.textContent = folder.relativePath;
+    savedFoldersSelectEl.appendChild(opt);
+  }
+
+  syncSavedFolderSelect(state.browsing.path || '');
+}
+
+function openSavedFolder() {
+  const selected = savedFoldersSelectEl.value || '';
+  openParaDir(selected);
+}
+
+function syncSavedFolderSelect(currentPath) {
+  const selected = String(currentPath || '');
+  const hasOption = Array.from(savedFoldersSelectEl.options || []).some((opt) => opt.value === selected);
+  savedFoldersSelectEl.value = hasOption ? selected : '';
 }
 
 async function openParaFile(relativePath) {
@@ -469,6 +587,7 @@ async function createFolder() {
 
   newFolderNameEl.value = '';
   await loadParaFolder();
+  await refreshSavedFoldersSelector();
 }
 
 async function uploadToCurrentFolder() {
@@ -496,6 +615,7 @@ async function uploadToCurrentFolder() {
   uploadCustomNameEl.value = '';
   overwriteUploadEl.checked = false;
   await loadParaFolder();
+  await refreshSavedFoldersSelector();
 }
 
 async function deleteFile(relativePath) {
@@ -538,6 +658,7 @@ async function deleteFolder(folderPath) {
   }
 
   await loadParaFolder();
+  await refreshSavedFoldersSelector();
 }
 
 async function deleteCurrentFolder() {
@@ -550,6 +671,7 @@ async function deleteCurrentFolder() {
   state.browsing.path = getParentPath(folderPath);
   browserPathEl.value = state.browsing.path;
   await loadParaFolder();
+  await refreshSavedFoldersSelector();
 }
 
 function openParaDir(relativePath) {
@@ -601,6 +723,7 @@ window.openParaFile = openParaFile;
 window.deleteFile = deleteFile;
 window.deleteFolder = deleteFolder;
 window.resolveAlert = resolveAlert;
+window.openQuickSummary = openQuickSummary;
 
 async function resolveAlert(id) {
   const res = await fetch(`/api/metacog/alerts/${id}/resolve`, { method: 'POST' });

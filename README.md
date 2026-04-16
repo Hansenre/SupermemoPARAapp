@@ -19,6 +19,9 @@ App proprio para revisao espacada (3/10/30/60) com organizacao PARA (Projects, A
   - substituir arquivo existente (mesmo nome)
   - excluir arquivo
   - excluir pasta vazia
+- Seletor de pastas salvas no Explorador:
+  - ao trocar categoria PARA, o app lista automaticamente as pastas ja criadas
+  - permite abrir rapidamente uma pasta existente sem digitar caminho manual
 - Interface renovada com layout moderno e foco em usabilidade
 - Fluxo de revisao com tecnicas de memorizacao:
   - Active Recall (recordar antes de abrir o material)
