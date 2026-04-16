@@ -13,6 +13,28 @@ App proprio para revisao espacada (3/10/30/60) com organizacao PARA (Projects, A
 - Fila de revisao diaria
 - Pop-up de revisao para itens vencidos
 - Explorador PARA para navegar nas pastas e editar arquivos `.md/.txt`
+- Gestao completa no Explorador PARA:
+  - criar subpasta
+  - adicionar novo arquivo na pasta atual
+  - substituir arquivo existente (mesmo nome)
+  - excluir arquivo
+  - excluir pasta vazia
+- Interface renovada com layout moderno e foco em usabilidade
+- Fluxo de revisao com tecnicas de memorizacao:
+  - Active Recall (recordar antes de abrir o material)
+  - Metacognicao (registrar nivel de confianca)
+  - Feedback imediato (comparar e classificar)
+  - Flashcards dentro do pop-up de revisao
+  - Loci (Palacio da Memoria) por resumo, com cue no momento da revisao
+- Algoritmo adaptativo de espacamento:
+  - Ajusta o proximo intervalo usando historico de desempenho por resumo
+  - Considera confianca e calibracao metacognitiva
+- Deteccao de ilusao de competencia:
+  - Quando ha confianca alta + erro, gera alerta metacognitivo
+  - Alerta aparece no painel e pode ser resolvido
+- Meta semanal automatica por carga cognitiva:
+  - Calcula alvo semanal e diario considerando backlog, taxa de erro e esforco de recall
+  - Exibe status no dashboard (progresso e nivel de carga)
 - Reagendamento conforme desempenho:
   - `Lembrei bem`: avanca no ciclo
   - `Parcial`: revisa novamente em 2 dias

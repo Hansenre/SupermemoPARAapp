@@ -52,6 +52,33 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage });
+const uploadPara = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      try {
+        const { target } = resolveParaTargetFolder(req.body.category, req.body.currentPath);
+        cb(null, target);
+      } catch (err) {
+        cb(err);
+      }
+    },
+    filename: (req, file, cb) => {
+      try {
+        const { target } = resolveParaTargetFolder(req.body.category, req.body.currentPath);
+        const originalExt = path.extname(file.originalname) || '';
+        const requestedStem = sanitizeFileName(req.body.fileName || '');
+        const fallbackStem = sanitizeFileName(path.parse(file.originalname).name || 'arquivo');
+        const stem = requestedStem || fallbackStem;
+        const desiredName = `${stem}${originalExt}`;
+        const overwrite = String(req.body.overwrite || '').toLowerCase() === 'true';
+        const finalName = overwrite ? desiredName : createUniqueFileName(target, desiredName);
+        cb(null, finalName);
+      } catch (err) {
+        cb(err);
+      }
+    }
+  })
+});
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
@@ -79,13 +106,47 @@ app.get('/api/dashboard', (req, res) => {
     GROUP BY para_category
   `).all();
 
-  res.json({ dueToday, active, byPara });
+  const weeklyGoal = computeWeeklyGoal(new Date());
+  const openIllusions = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM metacog_alerts
+    WHERE resolved_at IS NULL
+  `).get().total;
+
+  res.json({ dueToday, active, byPara, weeklyGoal, openIllusions });
+});
+
+app.get('/api/weekly-goal', (req, res) => {
+  const weeklyGoal = computeWeeklyGoal(new Date());
+  res.json(weeklyGoal);
+});
+
+app.get('/api/metacog/alerts', (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, summary_id AS summaryId, review_id AS reviewId, title, message, created_at AS createdAt
+    FROM metacog_alerts
+    WHERE resolved_at IS NULL
+    ORDER BY created_at DESC
+    LIMIT 15
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/metacog/alerts/:id/resolve', (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare(`
+    UPDATE metacog_alerts
+    SET resolved_at = ?
+    WHERE id = ?
+  `).run(new Date().toISOString(), id);
+  res.json({ ok: true });
 });
 
 app.get('/api/review-queue', (req, res) => {
   const today = startOfDayISO(new Date());
   const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, current_step AS currentStep, next_review_at AS nextReviewAt
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, current_step AS currentStep, next_review_at AS nextReviewAt,
+           loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     WHERE status = 'active' AND next_review_at <= ?
     ORDER BY next_review_at ASC
@@ -96,11 +157,23 @@ app.get('/api/review-queue', (req, res) => {
 
 app.get('/api/summaries', (req, res) => {
   const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, current_step AS currentStep, next_review_at AS nextReviewAt, status
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
+           loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     ORDER BY created_at DESC
   `).all();
   res.json(rows);
+});
+
+app.get('/api/summaries/:id/flashcards', (req, res) => {
+  const id = Number(req.params.id);
+  const cards = db.prepare(`
+    SELECT id, prompt, answer
+    FROM flashcards
+    WHERE summary_id = ?
+    ORDER BY id ASC
+  `).all(id);
+  res.json(cards);
 });
 
 app.get('/api/para/browse', (req, res) => {
@@ -175,6 +248,44 @@ app.get('/api/para/file', (req, res) => {
   }
 });
 
+app.post('/api/para/folder', (req, res) => {
+  try {
+    const para = normalizePara(req.body.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const currentPath = String(req.body.currentPath || '');
+    const folderName = sanitizeFileName(req.body.folderName || '');
+
+    if (!folderName) {
+      return res.status(400).json({ error: 'Nome da pasta obrigatorio.' });
+    }
+
+    const parentDir = resolveInsideBase(baseDir, currentPath);
+    const targetDir = path.join(parentDir, folderName);
+
+    if (!isInsideBase(baseDir, targetDir)) {
+      return res.status(400).json({ error: 'Caminho invalido.' });
+    }
+
+    fs.mkdirSync(targetDir, { recursive: true });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao criar pasta.' });
+  }
+});
+
+app.post('/api/para/upload', uploadPara.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Arquivo obrigatorio.' });
+    }
+    res.status(201).json({ ok: true, filePath: req.file.path });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha no upload do arquivo.' });
+  }
+});
+
 app.put('/api/para/file', (req, res) => {
   try {
     const para = normalizePara(req.body.category || 'resources');
@@ -200,6 +311,53 @@ app.put('/api/para/file', (req, res) => {
   }
 });
 
+app.delete('/api/para/file', (req, res) => {
+  try {
+    const para = normalizePara(req.body.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const filePath = String(req.body.filePath || '');
+    const absolutePath = resolveInsideBase(baseDir, filePath);
+
+    if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+      return res.status(404).json({ error: 'Arquivo nao encontrado.' });
+    }
+
+    fs.unlinkSync(absolutePath);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao excluir arquivo.' });
+  }
+});
+
+app.delete('/api/para/folder', (req, res) => {
+  try {
+    const para = normalizePara(req.body.category || 'resources');
+    const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
+    const folderPath = String(req.body.folderPath || '');
+
+    if (!folderPath) {
+      return res.status(400).json({ error: 'Pasta invalida.' });
+    }
+
+    const absolutePath = resolveInsideBase(baseDir, folderPath);
+    if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isDirectory()) {
+      return res.status(404).json({ error: 'Pasta nao encontrada.' });
+    }
+
+    const items = fs.readdirSync(absolutePath);
+    if (items.length > 0) {
+      return res.status(400).json({ error: 'Pasta nao esta vazia.' });
+    }
+
+    fs.rmdirSync(absolutePath);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao excluir pasta.' });
+  }
+});
+
 app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
   try {
     const title = (req.body.title || '').trim();
@@ -207,6 +365,10 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     const folderName = (req.body.folderName || '').trim();
     const fileNameInput = (req.body.fileName || '').trim();
     const summaryText = (req.body.summaryText || '').trim();
+    const lociPalace = String(req.body.lociPalace || '').trim().slice(0, 160);
+    const lociRoom = String(req.body.lociRoom || '').trim().slice(0, 160);
+    const lociHook = String(req.body.lociHook || '').trim().slice(0, 500);
+    const flashcardsRaw = req.body.flashcardsRaw;
 
     if (!title) {
       return res.status(400).json({ error: 'Titulo obrigatorio.' });
@@ -232,16 +394,30 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     const nextReview = addDays(created, REVIEW_INTERVALS[0]);
 
     const result = db.prepare(`
-      INSERT INTO summaries (title, para_category, file_path, created_at, current_step, next_review_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, 'active')
+      INSERT INTO summaries (title, para_category, file_path, created_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
     `).run(
       title,
       para,
       filePath,
       created.toISOString(),
       0,
-      startOfDayISO(nextReview)
+      startOfDayISO(nextReview),
+      lociPalace || null,
+      lociRoom || null,
+      lociHook || null
     );
+
+    const summaryId = Number(result.lastInsertRowid);
+    const flashcards = parseFlashcards(flashcardsRaw);
+    const insertCard = db.prepare(`
+      INSERT INTO flashcards (summary_id, prompt, answer, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    for (const card of flashcards) {
+      insertCard.run(summaryId, card.prompt, card.answer, created.toISOString());
+    }
 
     res.status(201).json({ id: result.lastInsertRowid });
   } catch (err) {
@@ -253,6 +429,9 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
 app.post('/api/summaries/:id/review', (req, res) => {
   const id = Number(req.params.id);
   const grade = (req.body.grade || '').trim();
+  const confidence = Number.isFinite(Number(req.body.confidence)) ? Number(req.body.confidence) : null;
+  const recallNote = String(req.body.recallNote || '').slice(0, 4000);
+  const recallSeconds = Number.isFinite(Number(req.body.recallSeconds)) ? Number(req.body.recallSeconds) : null;
 
   if (!['good', 'partial', 'forgot'].includes(grade)) {
     return res.status(400).json({ error: 'Grade invalida.' });
@@ -268,18 +447,11 @@ app.post('/api/summaries/:id/review', (req, res) => {
   }
 
   const now = new Date();
-  let newStep = item.current_step;
-  let nextDate;
-
-  if (grade === 'good') {
-    newStep = Math.min(item.current_step + 1, REVIEW_INTERVALS.length - 1);
-    nextDate = addDays(now, REVIEW_INTERVALS[newStep]);
-  } else if (grade === 'partial') {
-    nextDate = addDays(now, 2);
-  } else {
-    newStep = 0;
-    nextDate = addDays(now, REVIEW_INTERVALS[0]);
-  }
+  const adaptive = calculateAdaptiveSchedule(item, grade, confidence, now);
+  const newStep = adaptive.newStep;
+  const nextDate = adaptive.nextDate;
+  const adaptiveDays = adaptive.intervalDays;
+  const illusionDetected = isIllusionOfCompetence(grade, confidence);
 
   const nextReviewAt = startOfDayISO(nextDate);
 
@@ -294,7 +466,28 @@ app.post('/api/summaries/:id/review', (req, res) => {
     VALUES (?, ?, ?, ?, ?)
   `).run(id, now.toISOString(), grade, newStep, nextReviewAt);
 
-  res.json({ ok: true, nextReviewAt, currentStep: newStep });
+  const reviewId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+  db.prepare(`
+    UPDATE reviews
+    SET confidence = ?, recall_note = ?, recall_seconds = ?, adaptive_days = ?, is_illusion = ?
+    WHERE id = ?
+  `).run(confidence, recallNote || null, recallSeconds, adaptiveDays, illusionDetected ? 1 : 0, reviewId);
+
+  if (illusionDetected) {
+    const message = 'Confianca alta com erro detectada. Faça 1 ciclo extra de recall ativo antes da proxima revisao.';
+    db.prepare(`
+      INSERT INTO metacog_alerts (summary_id, review_id, title, message, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, reviewId, 'Possivel ilusao de competencia', message, now.toISOString());
+  }
+
+  res.json({
+    ok: true,
+    nextReviewAt,
+    currentStep: newStep,
+    adaptiveDays,
+    illusionDetected
+  });
 });
 
 app.post('/api/summaries/:id/archive', (req, res) => {
@@ -357,7 +550,10 @@ function initDb() {
       current_step INTEGER NOT NULL DEFAULT 0,
       next_review_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
-      last_grade TEXT
+      last_grade TEXT,
+      loci_palace TEXT,
+      loci_room TEXT,
+      loci_hook TEXT
     );
 
     CREATE TABLE IF NOT EXISTS reviews (
@@ -367,9 +563,42 @@ function initDb() {
       grade TEXT NOT NULL,
       resulting_step INTEGER NOT NULL,
       next_review_at TEXT NOT NULL,
+      confidence INTEGER,
+      recall_note TEXT,
+      recall_seconds INTEGER,
+      adaptive_days INTEGER,
+      is_illusion INTEGER DEFAULT 0,
       FOREIGN KEY(summary_id) REFERENCES summaries(id)
     );
+
+    CREATE TABLE IF NOT EXISTS flashcards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      summary_id INTEGER NOT NULL,
+      prompt TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(summary_id) REFERENCES summaries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS metacog_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      summary_id INTEGER NOT NULL,
+      review_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
   `);
+
+  ensureColumn('reviews', 'confidence', 'INTEGER');
+  ensureColumn('reviews', 'recall_note', 'TEXT');
+  ensureColumn('reviews', 'recall_seconds', 'INTEGER');
+  ensureColumn('reviews', 'adaptive_days', 'INTEGER');
+  ensureColumn('reviews', 'is_illusion', 'INTEGER DEFAULT 0');
+  ensureColumn('summaries', 'loci_palace', 'TEXT');
+  ensureColumn('summaries', 'loci_room', 'TEXT');
+  ensureColumn('summaries', 'loci_hook', 'TEXT');
 }
 
 function normalizePara(value) {
@@ -400,6 +629,30 @@ function startOfDayISO(date) {
 
 function buildSummaryTemplate(title, body) {
   return `# ${title}\n\n## Contexto\n${body}\n\n## 5 bullets-chave\n- \n- \n- \n- \n- \n\n## Exemplo pratico\n- \n\n## 3 perguntas de recall\n1. \n2. \n3. \n\n## Proxima acao\n- `;
+}
+
+function parseFlashcards(raw) {
+  const source = Array.isArray(raw) ? raw.join('\n') : String(raw || '');
+  const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const cards = [];
+
+  for (const line of lines) {
+    const idx = line.indexOf('::');
+    if (idx === -1) {
+      continue;
+    }
+    const prompt = line.slice(0, idx).trim();
+    const answer = line.slice(idx + 2).trim();
+    if (!prompt || !answer) {
+      continue;
+    }
+    cards.push({
+      prompt: prompt.slice(0, 500),
+      answer: answer.slice(0, 1000)
+    });
+  }
+
+  return cards.slice(0, 50);
 }
 
 function resolveParaTargetFolder(category, folderName) {
@@ -470,4 +723,161 @@ function isInsideBase(baseDir, targetPath) {
 
 function toUnixPath(value) {
   return String(value || '').replace(/\\/g, '/');
+}
+
+function isIllusionOfCompetence(grade, confidence) {
+  return Number.isFinite(confidence) && confidence >= 75 && grade !== 'good';
+}
+
+function calculateAdaptiveSchedule(item, grade, confidence, now) {
+  const metrics = getSummaryMemoryMetrics(item.id);
+  let newStep = item.current_step;
+  let intervalDays = REVIEW_INTERVALS[Math.max(0, Math.min(item.current_step, REVIEW_INTERVALS.length - 1))];
+
+  if (grade === 'good') {
+    newStep = Math.min(item.current_step + 1, REVIEW_INTERVALS.length - 1);
+    const base = REVIEW_INTERVALS[newStep];
+    const performanceFactor = clamp(0.75 + (metrics.avgScore * 0.7), 0.75, 1.45);
+    const calibrationPenalty = metrics.overconfidenceRate > 0.34 ? 0.12 : 0;
+    const confidenceBoost = (Number.isFinite(confidence) && confidence >= 80 && metrics.overconfidenceRate < 0.25) ? 0.08 : 0;
+    intervalDays = Math.round(clamp(base * (performanceFactor - calibrationPenalty + confidenceBoost), 2, 180));
+  } else if (grade === 'partial') {
+    newStep = Math.max(item.current_step - 1, 0);
+    const base = REVIEW_INTERVALS[newStep];
+    intervalDays = Math.round(clamp(base * 0.45, 1, 45));
+    if (Number.isFinite(confidence) && confidence >= 75) {
+      intervalDays = Math.max(1, intervalDays - 1);
+    }
+  } else {
+    newStep = 0;
+    intervalDays = (Number.isFinite(confidence) && confidence >= 80) ? 1 : 3;
+  }
+
+  return {
+    newStep,
+    intervalDays,
+    nextDate: addDays(now, intervalDays)
+  };
+}
+
+function getSummaryMemoryMetrics(summaryId) {
+  const rows = db.prepare(`
+    SELECT grade, confidence
+    FROM reviews
+    WHERE summary_id = ?
+    ORDER BY reviewed_at DESC
+    LIMIT 12
+  `).all(summaryId);
+
+  if (!rows.length) {
+    return { avgScore: 0.65, overconfidenceRate: 0 };
+  }
+
+  let scoreSum = 0;
+  let overconfidenceCount = 0;
+
+  for (const row of rows) {
+    scoreSum += gradeToScore(row.grade);
+    if (Number.isFinite(row.confidence) && Number(row.confidence) >= 75 && row.grade !== 'good') {
+      overconfidenceCount += 1;
+    }
+  }
+
+  return {
+    avgScore: scoreSum / rows.length,
+    overconfidenceRate: overconfidenceCount / rows.length
+  };
+}
+
+function gradeToScore(grade) {
+  if (grade === 'good') return 1;
+  if (grade === 'partial') return 0.55;
+  return 0;
+}
+
+function computeWeeklyGoal(referenceDate) {
+  const now = new Date(referenceDate);
+  const weekStart = startOfWeek(now);
+  const weekEnd = addDays(weekStart, 7);
+  const next7 = addDays(now, 7).toISOString();
+  const todayStart = startOfDayISO(now);
+
+  const active = db.prepare(`SELECT COUNT(*) AS total FROM summaries WHERE status='active'`).get().total;
+  const dueToday = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM summaries
+    WHERE status='active' AND next_review_at <= ?
+  `).get(todayStart).total;
+  const dueNext7 = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM summaries
+    WHERE status='active' AND next_review_at <= ?
+  `).get(next7).total;
+
+  const reviewedThisWeek = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM reviews
+    WHERE reviewed_at >= ? AND reviewed_at < ?
+  `).get(weekStart.toISOString(), weekEnd.toISOString()).total;
+
+  const recentRows = db.prepare(`
+    SELECT grade, recall_seconds AS recallSeconds
+    FROM reviews
+    WHERE reviewed_at >= ?
+  `).all(addDays(now, -30).toISOString());
+
+  const totalRecent = recentRows.length;
+  const errorCount = recentRows.filter((row) => row.grade !== 'good').length;
+  const errorRate = totalRecent > 0 ? errorCount / totalRecent : 0.25;
+
+  const recallValues = recentRows.map((row) => Number(row.recallSeconds)).filter((v) => Number.isFinite(v) && v > 0);
+  const avgRecallSeconds = recallValues.length
+    ? recallValues.reduce((acc, v) => acc + v, 0) / recallValues.length
+    : 45;
+
+  const rawGoal = Math.round((dueNext7 * (1 + errorRate * 0.35)) + (active * 0.15) + (dueToday * 0.4));
+  const targetReviews = Math.round(clamp(rawGoal, 12, 320));
+  const dailyTarget = Math.max(1, Math.ceil(targetReviews / 7));
+  const weekProgress = Math.min(1, reviewedThisWeek / targetReviews);
+  const weekdayIndex = ((now.getDay() + 6) % 7) + 1;
+  const expectedByToday = Math.ceil((targetReviews / 7) * weekdayIndex);
+  const onTrack = reviewedThisWeek >= expectedByToday;
+
+  return {
+    targetReviews,
+    reviewedThisWeek,
+    dailyTarget,
+    weekProgress,
+    onTrack,
+    cognitiveLoad: classifyCognitiveLoad(avgRecallSeconds, errorRate),
+    avgRecallSeconds: Math.round(avgRecallSeconds),
+    errorRate: Number(errorRate.toFixed(2))
+  };
+}
+
+function classifyCognitiveLoad(avgRecallSeconds, errorRate) {
+  if (avgRecallSeconds >= 80 || errorRate >= 0.45) return 'alta';
+  if (avgRecallSeconds >= 50 || errorRate >= 0.25) return 'media';
+  return 'baixa';
+}
+
+function startOfWeek(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function ensureColumn(tableName, columnName, columnType) {
+  const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const exists = cols.some((col) => col.name === columnName);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+  }
 }

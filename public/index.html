@@ -7,102 +7,181 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="hero">
-      <h1>SuperMemo PARA</h1>
-      <p>Resumos de 1 pagina com revisao espacada em 3/10/30/60 dias.</p>
+    <div class="bg-shape bg-shape-1"></div>
+    <div class="bg-shape bg-shape-2"></div>
+
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Knowledge OS</p>
+        <h1>SuperMemo PARA</h1>
+        <p class="subtitle">Revisao 3/10/30/60 com Active Recall, Flashcards e Palacio da Memoria.</p>
+      </div>
+      <div class="stats-row">
+        <article class="stat-pill">
+          <span>Revisoes hoje</span>
+          <strong id="dueToday">0</strong>
+        </article>
+        <article class="stat-pill">
+          <span>Ativos</span>
+          <strong id="activeTotal">0</strong>
+        </article>
+        <article class="stat-pill">
+          <span>Meta semanal</span>
+          <strong id="weeklyGoalStat">0/0</strong>
+        </article>
+      </div>
     </header>
 
-    <main class="layout">
-      <section class="card stats">
-        <h2>Painel</h2>
-        <div class="stats-grid">
-          <div>
-            <strong id="dueToday">0</strong>
-            <span>Revisoes hoje</span>
-          </div>
-          <div>
-            <strong id="activeTotal">0</strong>
-            <span>Resumos ativos</span>
-          </div>
-        </div>
-        <p id="paraBreakdown" class="muted"></p>
-      </section>
+    <main class="grid">
+      <section class="panel">
+        <h2>Novo Resumo</h2>
+        <p class="muted" id="paraBreakdown"></p>
 
-      <section class="card">
-        <h2>Novo resumo</h2>
-        <form id="summaryForm">
+        <form id="summaryForm" class="form-grid">
           <label>Titulo</label>
           <input name="title" required maxlength="120" />
 
-          <label>Categoria PARA</label>
-          <select name="paraCategory">
-            <option value="projects">Projects</option>
-            <option value="areas">Areas</option>
-            <option value="resources" selected>Resources</option>
-            <option value="inbox">Inbox</option>
-          </select>
+          <div class="grid-two">
+            <div>
+              <label>Onde salvar (PARA)</label>
+              <select name="paraCategory">
+                <option value="projects">Projects</option>
+                <option value="areas">Areas</option>
+                <option value="resources" selected>Resources</option>
+                <option value="inbox">Inbox</option>
+              </select>
+            </div>
+            <div>
+              <label>Subpasta</label>
+              <input name="folderName" placeholder="ex: curso_ingles/modulo_1" maxlength="120" />
+            </div>
+          </div>
 
-          <label>Titulo da subpasta (opcional)</label>
-          <input name="folderName" placeholder="ex: curso_ingles/modulo_1" maxlength="120" />
-
-          <label>Nome do arquivo (opcional)</label>
+          <label>Nome do arquivo</label>
           <input name="fileName" placeholder="ex: resumo_aula_03" maxlength="120" />
 
-          <label>Upload do resumo (pdf/md/txt)</label>
+          <div class="memory-box">
+            <h3>Loci (Palacio da Memoria)</h3>
+            <input name="lociPalace" placeholder="Palacio (ex: Minha casa)" maxlength="160" />
+            <input name="lociRoom" placeholder="Sala/rota (ex: Cozinha, bancada)" maxlength="160" />
+            <textarea name="lociHook" rows="3" placeholder="Gancho visual absurdo para fixacao (ex: uma balanca gigante no fogao)"></textarea>
+          </div>
+
+          <label>Flashcards (1 por linha: Pergunta::Resposta)</label>
+          <textarea name="flashcardsRaw" rows="4" placeholder="Capital da Franca::Paris&#10;Fotossintese acontece em::Cloroplastos"></textarea>
+
+          <label>Upload do arquivo</label>
           <input type="file" name="summaryFile" />
 
-          <label>Ou cole o resumo aqui</label>
+          <label>Ou cole o resumo</label>
           <textarea name="summaryText" rows="8" placeholder="Maximo recomendado: 1 pagina"></textarea>
 
           <button type="submit">Salvar resumo</button>
         </form>
       </section>
 
-      <section class="card">
-        <h2>Fila de revisao</h2>
+      <section class="panel">
+        <h2>Fila de Revisao</h2>
         <div id="queue" class="list"></div>
       </section>
 
-      <section class="card">
+      <section class="panel">
         <h2>Biblioteca</h2>
         <div id="library" class="list"></div>
       </section>
 
-      <section class="card">
-        <h2>Explorador PARA</h2>
-        <label>Categoria</label>
-        <select id="browserCategory">
-          <option value="projects">Projects</option>
-          <option value="areas">Areas</option>
-          <option value="resources" selected>Resources</option>
-          <option value="inbox">Inbox</option>
-          <option value="archives">Archives</option>
-        </select>
+      <section class="panel">
+        <h2>Metacognicao</h2>
+        <p class="muted" id="cognitiveLoadText">Carga cognitiva: --</p>
+        <p class="muted" id="alertsCountText">Alertas de ilusao: 0</p>
+        <div id="alertsList" class="list"></div>
+      </section>
 
-        <label>Subpasta atual</label>
-        <input id="browserPath" placeholder="vazio = raiz da categoria" />
-        <button id="browseBtn" type="button">Abrir pasta</button>
+      <section class="panel panel-wide">
+        <h2>Explorador PARA</h2>
+
+        <div class="toolbar">
+          <select id="browserCategory">
+            <option value="projects">Projects</option>
+            <option value="areas">Areas</option>
+            <option value="resources" selected>Resources</option>
+            <option value="inbox">Inbox</option>
+            <option value="archives">Archives</option>
+          </select>
+          <input id="browserPath" placeholder="Subpasta atual" />
+          <button id="browseBtn" type="button" class="btn-secondary">Abrir pasta</button>
+        </div>
+
+        <div class="toolbar compact">
+          <input id="newFolderName" placeholder="Nova subpasta" />
+          <button id="createFolderBtn" type="button" class="btn-secondary">Criar pasta</button>
+          <button id="deleteFolderBtn" type="button" class="btn-danger">Excluir pasta atual (vazia)</button>
+        </div>
+
+        <div class="toolbar compact upload-row">
+          <input id="uploadCustomName" placeholder="Nome do novo arquivo (opcional)" />
+          <input id="uploadFileInput" type="file" />
+          <label class="toggle"><input id="overwriteUpload" type="checkbox" /> Substituir se mesmo nome</label>
+          <button id="uploadBtn" type="button" class="btn-secondary">Adicionar arquivo</button>
+        </div>
+
         <div id="browserList" class="list"></div>
 
-        <hr />
-
-        <p id="editingFile" class="muted">Nenhum arquivo aberto para edicao.</p>
-        <textarea id="fileEditor" rows="10" placeholder="Conteudo do arquivo .md/.txt"></textarea>
-        <button id="saveFileBtn" type="button">Salvar arquivo aberto</button>
+        <div class="editor-wrap">
+          <p id="editingFile" class="muted">Nenhum arquivo aberto para edicao.</p>
+          <textarea id="fileEditor" rows="12" placeholder="Edicao de arquivos .md/.txt"></textarea>
+          <button id="saveFileBtn" type="button">Salvar arquivo aberto</button>
+        </div>
       </section>
     </main>
 
     <div id="reviewModal" class="modal hidden">
-      <div class="modal-content">
+      <div class="modal-content review-modal">
+        <div class="review-steps">
+          <span id="stepBadge1" class="step-badge active">1. Recordar</span>
+          <span id="stepBadge2" class="step-badge">2. Conferir</span>
+          <span id="stepBadge3" class="step-badge">3. Classificar</span>
+        </div>
+
         <h3 id="modalTitle"></h3>
         <p id="modalMeta" class="muted"></p>
-        <a id="modalOpenFile" target="_blank" rel="noreferrer">Abrir resumo</a>
 
-        <div class="actions">
-          <button data-grade="good">Lembrei bem</button>
-          <button data-grade="partial">Parcial</button>
-          <button data-grade="forgot">Esqueci</button>
-        </div>
+        <section id="recallStep" class="step-block">
+          <p class="coach-text">Sem abrir o material, escreva o que lembra. Quanto mais esforco, melhor a consolidacao.</p>
+          <textarea id="recallNote" rows="5" placeholder="Escreva o que voce lembra do conteudo..."></textarea>
+          <label>Nivel de confianca antes de conferir: <strong id="confidenceValue">50%</strong></label>
+          <input id="confidenceInput" type="range" min="0" max="100" value="50" />
+          <button id="revealBtn" type="button">Conferir com resumo</button>
+        </section>
+
+        <section id="compareStep" class="step-block hidden">
+          <div id="lociCard" class="loci-card hidden">
+            <strong>Loci cue</strong>
+            <p id="lociText"></p>
+          </div>
+
+          <a id="modalOpenFile" target="_blank" rel="noreferrer">Abrir resumo</a>
+
+          <div id="flashcardBox" class="flashcard-box hidden">
+            <strong>Flashcard rapido</strong>
+            <p id="flashcardPrompt"></p>
+            <p id="flashcardAnswer" class="hidden"></p>
+            <div class="item-actions">
+              <button id="showFlashcardAnswerBtn" type="button" class="btn-secondary">Mostrar resposta</button>
+              <button id="nextFlashcardBtn" type="button" class="btn-secondary">Proximo</button>
+            </div>
+          </div>
+
+          <button id="toGradeBtn" type="button">Ir para classificacao</button>
+        </section>
+
+        <section id="gradeStep" class="step-block hidden">
+          <div class="actions">
+            <button data-grade="good">Lembrei bem</button>
+            <button data-grade="partial">Parcial</button>
+            <button data-grade="forgot">Esqueci</button>
+          </div>
+        </section>
       </div>
     </div>
 
