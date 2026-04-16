@@ -75,6 +75,10 @@ const quickSummaryLociEl = document.getElementById('quickSummaryLoci');
 const quickSummaryCardsEl = document.getElementById('quickSummaryCards');
 const quickSummaryPreviewEl = document.getElementById('quickSummaryPreview');
 const quickSummaryOpenLinkEl = document.getElementById('quickSummaryOpenLink');
+const summaryParaCategoryEl = document.getElementById('summaryParaCategory');
+const summaryFolderNameEl = document.getElementById('summaryFolderName');
+const summarySavedFoldersSelectEl = document.getElementById('summarySavedFoldersSelect');
+const summaryUseSavedFolderBtnEl = document.getElementById('summaryUseSavedFolderBtn');
 
 init();
 
@@ -91,6 +95,8 @@ async function init() {
   weeklyGoalCardEl.addEventListener('click', openWeeklyGoalDetails);
   closeWeeklyGoalModalBtnEl.addEventListener('click', closeWeeklyGoalModal);
   closeQuickSummaryModalBtnEl.addEventListener('click', closeQuickSummaryModal);
+  summaryParaCategoryEl.addEventListener('change', refreshSummarySavedFoldersSelector);
+  summaryUseSavedFolderBtnEl.addEventListener('click', applySavedSummaryFolder);
 
   document.getElementById('browseBtn').addEventListener('click', () => {
     state.browsing.category = browserCategoryEl.value;
@@ -113,6 +119,7 @@ async function init() {
   document.getElementById('openSavedFolderBtn').addEventListener('click', openSavedFolder);
 
   await refreshAll();
+  await refreshSummarySavedFoldersSelector();
 
   setInterval(async () => {
     await refreshQueue();
@@ -191,6 +198,7 @@ async function refreshLibrary() {
         <div class="item-actions">
           <a href="${fileHref}" target="_blank" rel="noreferrer">Abrir</a>
           <button onclick="openQuickSummary(${item.id})" class="btn-secondary">Resumo rapido</button>
+          <button onclick="deleteSummary(${item.id})" class="btn-danger">Excluir</button>
           ${item.status === 'active' ? `<button onclick="archiveSummary(${item.id})" class="btn-danger">Arquivar</button>` : ''}
         </div>
       </article>
@@ -345,7 +353,48 @@ async function createSummary(event) {
   }
 
   event.target.reset();
+  await refreshSummarySavedFoldersSelector();
   await refreshAll();
+}
+
+async function refreshSummarySavedFoldersSelector() {
+  const category = summaryParaCategoryEl.value || 'resources';
+  const params = new URLSearchParams({
+    category,
+    maxDepth: '8'
+  });
+
+  const res = await fetch(`/api/para/folders?${params.toString()}`);
+  if (!res.ok) {
+    summarySavedFoldersSelectEl.innerHTML = '<option value="">(nenhuma subpasta)</option>';
+    return;
+  }
+
+  const data = await res.json();
+  summarySavedFoldersSelectEl.innerHTML = '';
+
+  const emptyOpt = document.createElement('option');
+  emptyOpt.value = '';
+  emptyOpt.textContent = '(nenhuma subpasta)';
+  summarySavedFoldersSelectEl.appendChild(emptyOpt);
+
+  for (const folder of data.folders || []) {
+    const opt = document.createElement('option');
+    opt.value = folder.relativePath;
+    opt.textContent = folder.relativePath;
+    summarySavedFoldersSelectEl.appendChild(opt);
+  }
+
+  const current = (summaryFolderNameEl.value || '').trim();
+  const hasCurrent = Array.from(summarySavedFoldersSelectEl.options).some((opt) => opt.value === current);
+  if (hasCurrent) {
+    summarySavedFoldersSelectEl.value = current;
+  }
+}
+
+function applySavedSummaryFolder() {
+  const selected = summarySavedFoldersSelectEl.value || '';
+  summaryFolderNameEl.value = selected;
 }
 
 async function onModalClick(event) {
@@ -433,6 +482,25 @@ async function archiveSummary(id) {
     alert('Falha ao arquivar.');
     return;
   }
+  await refreshAll();
+}
+
+async function deleteSummary(id) {
+  const confirmed = confirm('Deseja excluir este resumo da Biblioteca?');
+  if (!confirmed) return;
+
+  const removeFile = confirm('Tambem deseja excluir o arquivo fisico da pasta PARA?\\nOK = sim, Cancelar = manter arquivo.');
+
+  const res = await fetch(`/api/summaries/${id}?removeFile=${removeFile ? 'true' : 'false'}`, {
+    method: 'DELETE'
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Falha ao excluir resumo.');
+    return;
+  }
+
   await refreshAll();
 }
 
@@ -588,6 +656,7 @@ async function createFolder() {
   newFolderNameEl.value = '';
   await loadParaFolder();
   await refreshSavedFoldersSelector();
+  await refreshSummarySavedFoldersSelector();
 }
 
 async function uploadToCurrentFolder() {
@@ -616,6 +685,7 @@ async function uploadToCurrentFolder() {
   overwriteUploadEl.checked = false;
   await loadParaFolder();
   await refreshSavedFoldersSelector();
+  await refreshSummarySavedFoldersSelector();
 }
 
 async function deleteFile(relativePath) {
@@ -659,6 +729,7 @@ async function deleteFolder(folderPath) {
 
   await loadParaFolder();
   await refreshSavedFoldersSelector();
+  await refreshSummarySavedFoldersSelector();
 }
 
 async function deleteCurrentFolder() {
@@ -672,6 +743,7 @@ async function deleteCurrentFolder() {
   browserPathEl.value = state.browsing.path;
   await loadParaFolder();
   await refreshSavedFoldersSelector();
+  await refreshSummarySavedFoldersSelector();
 }
 
 function openParaDir(relativePath) {
@@ -724,6 +796,7 @@ window.deleteFile = deleteFile;
 window.deleteFolder = deleteFolder;
 window.resolveAlert = resolveAlert;
 window.openQuickSummary = openQuickSummary;
+window.deleteSummary = deleteSummary;
 
 async function resolveAlert(id) {
   const res = await fetch(`/api/metacog/alerts/${id}/resolve`, { method: 'POST' });

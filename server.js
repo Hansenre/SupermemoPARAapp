@@ -639,6 +639,35 @@ app.post('/api/summaries/:id/archive', (req, res) => {
   res.json({ ok: true });
 });
 
+app.delete('/api/summaries/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const summary = db.prepare('SELECT * FROM summaries WHERE id = ?').get(id);
+    if (!summary) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+
+    const removeFile = String(req.query.removeFile || '').toLowerCase() === 'true';
+
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM flashcards WHERE summary_id = ?').run(id);
+      db.prepare('DELETE FROM metacog_alerts WHERE summary_id = ?').run(id);
+      db.prepare('DELETE FROM reviews WHERE summary_id = ?').run(id);
+      db.prepare('DELETE FROM summaries WHERE id = ?').run(id);
+    });
+    tx();
+
+    if (removeFile && summary.file_path && fs.existsSync(summary.file_path)) {
+      fs.unlinkSync(summary.file_path);
+    }
+
+    res.json({ ok: true, removedFile: removeFile });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao excluir resumo.' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`SuperMemo PARA app rodando em http://localhost:${PORT}`);
 });

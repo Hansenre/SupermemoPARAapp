@@ -44,7 +44,7 @@
           <div class="grid-two">
             <div>
               <label>Onde salvar (PARA)</label>
-              <select name="paraCategory">
+              <select id="summaryParaCategory" name="paraCategory">
                 <option value="projects">Projects</option>
                 <option value="areas">Areas</option>
                 <option value="resources" selected>Resources</option>
@@ -53,7 +53,18 @@
             </div>
             <div>
               <label>Subpasta</label>
-              <input name="folderName" placeholder="ex: curso_ingles/modulo_1" maxlength="120" />
+              <input id="summaryFolderName" name="folderName" placeholder="ex: curso_ingles/modulo_1" maxlength="120" />
+            </div>
+          </div>
+
+          <div class="grid-two">
+            <div>
+              <label>Subpastas ja criadas</label>
+              <select id="summarySavedFoldersSelect"></select>
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <button id="summaryUseSavedFolderBtn" type="button" class="btn-secondary">Usar no campo Subpasta</button>
             </div>
           </div>
 
