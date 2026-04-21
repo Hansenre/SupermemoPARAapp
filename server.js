@@ -23,6 +23,11 @@ const PARA_MAP = {
   archives: 'Archives'
 };
 const REVIEW_INTERVALS = [3, 10, 30, 60];
+const STUDY_FOLDER_NAME = '_StudyScans';
+const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || '').trim();
+const OPENAI_MODEL = String(process.env.OPENAI_MODEL || 'gpt-4.1-mini').trim();
+const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+const OCR_SUPPORTED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
 ensureDirs();
 const db = new Database(DB_PATH);
@@ -30,7 +35,16 @@ initDb();
 
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
-app.use('/vault', express.static(VAULT_DIR));
+app.use('/vault', express.static(VAULT_DIR, {
+  etag: false,
+  maxAge: 0,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+  }
+}));
 
 app.get('/view', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'viewer.html'));
@@ -86,6 +100,53 @@ const uploadPara = multer({
       }
     }
   })
+});
+const uploadStudyPages = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      try {
+        const notebookId = Number(req.params.id);
+        const notebook = db.prepare(`
+          SELECT para_category AS paraCategory, folder_name AS folderName
+          FROM study_notebooks
+          WHERE id = ?
+        `).get(notebookId);
+        if (!notebook) {
+          throw new Error('Caderno nao encontrado.');
+        }
+        const target = ensureStudyPagesFolder(notebook.paraCategory, notebook.folderName);
+        cb(null, target);
+      } catch (err) {
+        cb(err);
+      }
+    },
+    filename: (req, file, cb) => {
+      try {
+        const notebookId = Number(req.params.id);
+        const notebook = db.prepare(`
+          SELECT para_category AS paraCategory, folder_name AS folderName
+          FROM study_notebooks
+          WHERE id = ?
+        `).get(notebookId);
+        if (!notebook) {
+          throw new Error('Caderno nao encontrado.');
+        }
+        const target = ensureStudyPagesFolder(notebook.paraCategory, notebook.folderName);
+        const originalExt = sanitizeImageExtension(path.extname(file.originalname));
+        const ext = originalExt || '.jpg';
+        const stem = sanitizeFileName(path.parse(file.originalname).name || 'pagina');
+        const desired = `${stem}${ext}`;
+        const finalName = createUniqueFileName(target, desired);
+        cb(null, finalName);
+      } catch (err) {
+        cb(err);
+      }
+    }
+  }),
+  limits: {
+    files: 50,
+    fileSize: 25 * 1024 * 1024
+  }
 });
 
 app.get('/api/health', (req, res) => {
@@ -195,13 +256,14 @@ app.get('/api/vault/read', (req, res) => {
 });
 
 app.get('/api/dashboard', (req, res) => {
-  const today = startOfDayISO(new Date());
+  const now = new Date();
+  const tomorrowStart = startOfDayISO(addDays(now, 1));
 
   const dueToday = db.prepare(`
     SELECT COUNT(*) AS total
     FROM summaries
-    WHERE status = 'active' AND next_review_at <= ?
-  `).get(today).total;
+    WHERE status = 'active' AND next_review_at < ?
+  `).get(tomorrowStart).total;
 
   const active = db.prepare(`
     SELECT COUNT(*) AS total
@@ -216,7 +278,7 @@ app.get('/api/dashboard', (req, res) => {
     GROUP BY para_category
   `).all();
 
-  const weeklyGoal = computeWeeklyGoal(new Date());
+  const weeklyGoal = computeWeeklyGoal(now);
   const openIllusions = db.prepare(`
     SELECT COUNT(*) AS total
     FROM metacog_alerts
@@ -278,6 +340,52 @@ app.get('/api/weekly-goal/details', (req, res) => {
   });
 });
 
+app.get('/api/weekly-goal/month', (req, res) => {
+  try {
+    const parsed = parseYearMonth(String(req.query.month || ''));
+    const base = parsed
+      ? new Date(parsed.year, parsed.monthIndex, 1)
+      : new Date();
+    base.setDate(1);
+    base.setHours(0, 0, 0, 0);
+
+    const year = base.getFullYear();
+    const monthIndex = base.getMonth();
+    const monthStart = new Date(year, monthIndex, 1);
+    const nextMonthStart = new Date(year, monthIndex + 1, 1);
+    const totalDays = new Date(year, monthIndex + 1, 0).getDate();
+    const days = [];
+
+    for (let day = 1; day <= totalDays; day += 1) {
+      const dayStart = new Date(year, monthIndex, day, 0, 0, 0, 0);
+      const dayEnd = addDays(dayStart, 1);
+      const goalForDay = computeWeeklyGoal(dayStart);
+      const dueCount = db.prepare(`
+        SELECT COUNT(*) AS total
+        FROM summaries
+        WHERE status = 'active' AND next_review_at >= ? AND next_review_at < ?
+      `).get(dayStart.toISOString(), dayEnd.toISOString()).total;
+
+      days.push({
+        date: toDateOnly(dayStart),
+        target: goalForDay.dailyTarget,
+        dueCount
+      });
+    }
+
+    res.json({
+      month: `${year}-${String(monthIndex + 1).padStart(2, '0')}`,
+      monthStart: monthStart.toISOString(),
+      monthEnd: nextMonthStart.toISOString(),
+      dailyTarget: computeWeeklyGoal(new Date()).dailyTarget,
+      days
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao carregar calendario mensal.' });
+  }
+});
+
 app.get('/api/weekly-goal/day-details', (req, res) => {
   try {
     const dateRaw = String(req.query.date || '').trim();
@@ -320,6 +428,95 @@ app.get('/api/metacog/alerts', (req, res) => {
   res.json(rows);
 });
 
+app.get('/api/metacog/candidates', (req, res) => {
+  const rows = db.prepare(`
+    SELECT
+      s.id AS summaryId,
+      s.title,
+      s.para_category AS paraCategory,
+      r.reviewed_at AS reviewedAt,
+      r.grade,
+      r.confidence,
+      mo.risk_override AS riskOverride,
+      CASE
+        WHEN mo.risk_override IS 1 THEN 'manual_risk'
+        WHEN mo.risk_override IS 0 THEN 'manual_safe'
+        ELSE 'auto'
+      END AS riskSource
+    FROM reviews r
+    JOIN summaries s ON s.id = r.summary_id
+    LEFT JOIN metacog_risk_overrides mo ON mo.summary_id = s.id
+    JOIN (
+      SELECT summary_id, MAX(reviewed_at) AS lastReviewedAt
+      FROM reviews
+      WHERE confidence IS NOT NULL
+      GROUP BY summary_id
+    ) lr ON lr.summary_id = r.summary_id AND lr.lastReviewedAt = r.reviewed_at
+    WHERE s.status = 'active'
+    ORDER BY r.reviewed_at DESC
+    LIMIT 20
+  `).all();
+
+  const shaped = rows.map((row) => {
+    const auto = evaluateMetacogRisk(row.grade, row.confidence);
+    const manual = Number.isFinite(Number(row.riskOverride)) ? Number(row.riskOverride) : null;
+    const riskFlag = manual === 1 ? 1 : manual === 0 ? 0 : (auto.riskFlag ? 1 : 0);
+    const riskReason = manual === 1
+      ? 'Ajuste manual: forcar risco'
+      : manual === 0
+        ? 'Ajuste manual: forcar sem risco'
+        : auto.reason;
+    const riskScore = manual === 1 ? 1 : manual === 0 ? 0 : auto.riskScore;
+    return {
+      ...row,
+      riskFlag,
+      riskScore,
+      riskReason
+    };
+  });
+
+  res.json(shaped);
+});
+
+app.put('/api/metacog/risk/:summaryId', (req, res) => {
+  try {
+    const summaryId = Number(req.params.summaryId);
+    const mode = String(req.body.mode || '').trim().toLowerCase();
+    const summary = db.prepare('SELECT id FROM summaries WHERE id = ?').get(summaryId);
+    if (!summary) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+
+    const now = new Date().toISOString();
+    if (mode === 'auto') {
+      db.prepare('DELETE FROM metacog_risk_overrides WHERE summary_id = ?').run(summaryId);
+      return res.json({ ok: true, mode: 'auto' });
+    }
+
+    let riskOverride = null;
+    if (mode === 'risk') {
+      riskOverride = 1;
+    } else if (mode === 'safe') {
+      riskOverride = 0;
+    } else {
+      return res.status(400).json({ error: 'Modo invalido. Use auto, risk ou safe.' });
+    }
+
+    db.prepare(`
+      INSERT INTO metacog_risk_overrides (summary_id, risk_override, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(summary_id) DO UPDATE SET
+        risk_override = excluded.risk_override,
+        updated_at = excluded.updated_at
+    `).run(summaryId, riskOverride, now);
+
+    res.json({ ok: true, mode, riskOverride });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao atualizar risco manual.' });
+  }
+});
+
 app.post('/api/metacog/alerts/:id/resolve', (req, res) => {
   const id = Number(req.params.id);
   db.prepare(`
@@ -333,7 +530,7 @@ app.post('/api/metacog/alerts/:id/resolve', (req, res) => {
 app.get('/api/review-queue', (req, res) => {
   const today = startOfDayISO(new Date());
   const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, current_step AS currentStep, next_review_at AS nextReviewAt,
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, note_path AS notePath, current_step AS currentStep, next_review_at AS nextReviewAt,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     WHERE status = 'active' AND next_review_at <= ?
@@ -345,7 +542,7 @@ app.get('/api/review-queue', (req, res) => {
 
 app.get('/api/summaries', (req, res) => {
   const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, release_at AS releaseAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, note_path AS notePath, created_at AS createdAt, release_at AS releaseAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     ORDER BY created_at DESC
@@ -367,7 +564,7 @@ app.get('/api/summaries/:id/flashcards', (req, res) => {
 app.get('/api/summaries/:id/quick', (req, res) => {
   const id = Number(req.params.id);
   const summary = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, created_at AS createdAt, release_at AS releaseAt, next_review_at AS nextReviewAt, status,
+    SELECT id, title, para_category AS paraCategory, file_path AS filePath, note_path AS notePath, created_at AS createdAt, release_at AS releaseAt, next_review_at AS nextReviewAt, status,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     WHERE id = ?
@@ -390,25 +587,45 @@ app.get('/api/summaries/:id/quick', (req, res) => {
   let fileSize = null;
   let fileUpdatedAt = null;
   let editableText = false;
+  let editableFilePath = null;
 
-  if (summary.filePath && fs.existsSync(summary.filePath)) {
-    const stat = fs.statSync(summary.filePath);
+  const resolvedFilePath = normalizeSummaryFilePath(summary.id, summary.filePath);
+  const resolvedNotePath = normalizeSummaryNotePath(summary.id, summary.notePath);
+  if (resolvedFilePath) {
+    summary.filePath = resolvedFilePath;
+  }
+  if (resolvedNotePath) {
+    summary.notePath = resolvedNotePath;
+  }
+
+  if (resolvedNotePath && isTextFilePath(resolvedNotePath)) {
+    editableFilePath = resolvedNotePath;
+  } else if (resolvedFilePath && isTextFilePath(resolvedFilePath)) {
+    editableFilePath = resolvedFilePath;
+  }
+
+  if (editableFilePath) {
+    const stat = fs.statSync(editableFilePath);
+    fileSize = stat.size;
+    fileUpdatedAt = stat.mtime.toISOString();
+    const content = fs.readFileSync(editableFilePath, 'utf8');
+    preview = content.slice(0, 1200);
+    previewType = 'text';
+    editableText = true;
+  } else if (resolvedFilePath) {
+    const stat = fs.statSync(resolvedFilePath);
     fileSize = stat.size;
     fileUpdatedAt = stat.mtime.toISOString();
 
-    const ext = path.extname(summary.filePath).toLowerCase();
-    if (['.md', '.txt'].includes(ext)) {
-      const content = fs.readFileSync(summary.filePath, 'utf8');
-      preview = content.slice(0, 1200);
-      previewType = 'text';
-      editableText = true;
-    } else if (ext === '.pdf') {
+    const ext = path.extname(resolvedFilePath).toLowerCase();
+    if (ext === '.pdf') {
       preview = 'Arquivo PDF detectado. Use "Abrir" para visualizar o conteudo completo.';
       previewType = 'pdf';
     } else {
       preview = `Arquivo ${ext || 'sem extensao'} detectado. Use "Abrir" para visualizar o conteudo completo.`;
       previewType = 'binary';
     }
+    editableText = true;
   } else {
     preview = 'Arquivo nao localizado no caminho salvo.';
     previewType = 'missing';
@@ -421,6 +638,7 @@ app.get('/api/summaries/:id/quick', (req, res) => {
     preview,
     previewType,
     editableText,
+    editableFilePath,
     fileSize,
     fileUpdatedAt
   });
@@ -469,13 +687,16 @@ app.put('/api/summaries/:id/memory', (req, res) => {
 app.put('/api/summaries/:id/text', (req, res) => {
   try {
     const id = Number(req.params.id);
-    const summary = db.prepare('SELECT id, file_path AS filePath FROM summaries WHERE id = ?').get(id);
+    const summary = db.prepare('SELECT id, file_path AS filePath, note_path AS notePath FROM summaries WHERE id = ?').get(id);
     if (!summary) {
       return res.status(404).json({ error: 'Resumo nao encontrado.' });
     }
 
-    const filePath = String(summary.filePath || '');
-    if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    let filePath = resolveEditableSummaryTextPath(summary);
+    if (!filePath) {
+      filePath = ensureSummaryNotePath(summary.id, summary.filePath, summary.notePath);
+    }
+    if (!filePath) {
       return res.status(404).json({ error: 'Arquivo do resumo nao encontrado.' });
     }
 
@@ -736,6 +957,527 @@ app.delete('/api/para/folder', (req, res) => {
   }
 });
 
+app.get('/api/study/notebooks', (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, subject, para_category AS paraCategory, folder_name AS folderName,
+           summary_path AS summaryPath, generated_pdf_path AS generatedPdfPath,
+           created_at AS createdAt, updated_at AS updatedAt
+    FROM study_notebooks
+    ORDER BY updated_at DESC
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/study/notebooks', (req, res) => {
+  try {
+    const subjectInput = String(req.body.subject || '').trim().slice(0, 120);
+    const para = normalizePara(req.body.paraCategory || 'resources');
+    const folderNameInput = String(req.body.folderName || '').trim();
+    if (!subjectInput) {
+      return res.status(400).json({ error: 'Materia obrigatoria.' });
+    }
+
+    const normalized = normalizeStudySubject(subjectInput);
+    const subject = normalized.subject;
+    const effectiveModule = folderNameInput || normalized.inferredModule;
+    const folderName = normalizeStudyFolderName(effectiveModule, subject);
+    const now = new Date().toISOString();
+
+    const existing = db.prepare(`
+      SELECT id FROM study_notebooks
+      WHERE para_category = ? AND folder_name = ?
+    `).get(para, folderName);
+
+    if (existing) {
+      return res.json({ id: existing.id, reused: true, subject, folderName, paraCategory: para });
+    }
+
+    ensureStudyNotebookFolders(para, folderName);
+    const result = db.prepare(`
+      INSERT INTO study_notebooks (subject, para_category, folder_name, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(subject, para, folderName, now, now);
+
+    res.status(201).json({
+      id: Number(result.lastInsertRowid),
+      reused: false,
+      subject,
+      folderName,
+      paraCategory: para
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao criar caderno.' });
+  }
+});
+
+app.get('/api/study/notebooks/:id/pages', (req, res) => {
+  const notebookId = Number(req.params.id);
+  const notebook = db.prepare(`
+    SELECT id, subject, para_category AS paraCategory, folder_name AS folderName,
+           generated_summary AS generatedSummary, generated_flashcards AS generatedFlashcards,
+           generated_pdf_path AS generatedPdfPath
+    FROM study_notebooks
+    WHERE id = ?
+  `).get(notebookId);
+  if (!notebook) {
+    return res.status(404).json({ error: 'Caderno nao encontrado.' });
+  }
+  resequenceStudyPagesByFileName(notebookId, new Date().toISOString());
+
+  const rows = db.prepare(`
+    SELECT id, page_order AS pageOrder, image_path AS imagePath, ocr_text AS ocrText, created_at AS createdAt, updated_at AS updatedAt
+    FROM study_pages
+    WHERE notebook_id = ?
+    ORDER BY page_order ASC, id ASC
+  `).all(notebookId);
+
+  res.json({
+    notebook: {
+      ...notebook,
+      pdfUrl: notebook.generatedPdfPath && fs.existsSync(notebook.generatedPdfPath)
+        ? toOpenFileUrl(notebook.generatedPdfPath)
+        : null
+    },
+    pages: rows.map((row) => ({
+      ...row,
+      imageUrl: toOpenFileUrl(row.imagePath)
+    }))
+  });
+});
+
+app.post('/api/study/notebooks/:id/pages', uploadStudyPages.array('pages', 50), (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const notebook = db.prepare(`
+      SELECT id, para_category AS paraCategory, folder_name AS folderName
+      FROM study_notebooks
+      WHERE id = ?
+    `).get(notebookId);
+
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) {
+      return res.status(400).json({ error: 'Envie ao menos 1 foto.' });
+    }
+
+    const now = new Date().toISOString();
+    const insert = db.prepare(`
+      INSERT INTO study_pages (notebook_id, page_order, image_path, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const file of files) {
+      insert.run(notebookId, 0, file.path, now, now);
+    }
+
+    resequenceStudyPagesByFileName(notebookId, now);
+    db.prepare('UPDATE study_notebooks SET updated_at = ? WHERE id = ?').run(now, notebookId);
+    res.status(201).json({ ok: true, added: files.length });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao salvar fotos.' });
+  }
+});
+
+app.delete('/api/study/notebooks/:id/pages/:pageId', (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const pageId = Number(req.params.pageId);
+    const notebook = db.prepare('SELECT generated_pdf_path AS generatedPdfPath FROM study_notebooks WHERE id = ?').get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+    const page = db.prepare(`
+      SELECT id, image_path AS imagePath
+      FROM study_pages
+      WHERE id = ? AND notebook_id = ?
+    `).get(pageId, notebookId);
+    if (!page) {
+      return res.status(404).json({ error: 'Pagina nao encontrada.' });
+    }
+
+    if (page.imagePath && fs.existsSync(page.imagePath)) {
+      fs.unlinkSync(page.imagePath);
+    }
+    if (notebook.generatedPdfPath && fs.existsSync(notebook.generatedPdfPath)) {
+      fs.unlinkSync(notebook.generatedPdfPath);
+    }
+
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM study_pages WHERE id = ? AND notebook_id = ?').run(pageId, notebookId);
+      resequenceStudyPages(notebookId, now);
+      db.prepare(`
+        UPDATE study_notebooks
+        SET generated_pdf_path = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now, notebookId);
+    });
+    tx();
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao excluir foto.' });
+  }
+});
+
+app.delete('/api/study/notebooks/:id/pages', (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const notebook = db.prepare(`
+      SELECT id, generated_pdf_path AS generatedPdfPath
+      FROM study_notebooks
+      WHERE id = ?
+    `).get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+
+    const rows = db.prepare(`
+      SELECT image_path AS imagePath
+      FROM study_pages
+      WHERE notebook_id = ?
+    `).all(notebookId);
+    for (const row of rows) {
+      if (row.imagePath && fs.existsSync(row.imagePath)) {
+        fs.unlinkSync(row.imagePath);
+      }
+    }
+    if (notebook.generatedPdfPath && fs.existsSync(notebook.generatedPdfPath)) {
+      fs.unlinkSync(notebook.generatedPdfPath);
+    }
+
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM study_pages WHERE notebook_id = ?').run(notebookId);
+      db.prepare(`
+        UPDATE study_notebooks
+        SET generated_pdf_path = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now, notebookId);
+    });
+    tx();
+
+    res.json({ ok: true, removed: rows.length });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao limpar fotos.' });
+  }
+});
+
+app.put('/api/study/notebooks/:id/pages/reorder', (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const notebook = db.prepare('SELECT id FROM study_notebooks WHERE id = ?').get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+
+    const orderedPageIds = Array.isArray(req.body.orderedPageIds)
+      ? req.body.orderedPageIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+    if (!orderedPageIds.length) {
+      return res.status(400).json({ error: 'orderedPageIds obrigatorio.' });
+    }
+
+    const rows = db.prepare(`
+      SELECT id
+      FROM study_pages
+      WHERE notebook_id = ?
+      ORDER BY page_order ASC, id ASC
+    `).all(notebookId);
+    if (rows.length !== orderedPageIds.length) {
+      return res.status(400).json({ error: 'Lista de paginas incompleta.' });
+    }
+
+    const existingIds = new Set(rows.map((row) => Number(row.id)));
+    const providedIds = new Set(orderedPageIds);
+    if (existingIds.size !== providedIds.size) {
+      return res.status(400).json({ error: 'Lista de paginas invalida.' });
+    }
+    for (const id of providedIds) {
+      if (!existingIds.has(id)) {
+        return res.status(400).json({ error: 'Lista contem pagina de outro caderno.' });
+      }
+    }
+
+    const now = new Date().toISOString();
+    const update = db.prepare(`
+      UPDATE study_pages
+      SET page_order = ?, updated_at = ?
+      WHERE id = ? AND notebook_id = ?
+    `);
+    const tx = db.transaction(() => {
+      for (let i = 0; i < orderedPageIds.length; i += 1) {
+        update.run(i + 1, now, orderedPageIds[i], notebookId);
+      }
+      db.prepare('UPDATE study_notebooks SET updated_at = ? WHERE id = ?').run(now, notebookId);
+    });
+    tx();
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao reordenar paginas.' });
+  }
+});
+
+app.delete('/api/study/notebooks/:id', (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const removeFiles = String(req.query.removeFiles || 'true').toLowerCase() === 'true';
+    const notebook = db.prepare(`
+      SELECT id, para_category AS paraCategory, folder_name AS folderName
+      FROM study_notebooks
+      WHERE id = ?
+    `).get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM study_pages WHERE notebook_id = ?').run(notebookId);
+      db.prepare('DELETE FROM study_notebooks WHERE id = ?').run(notebookId);
+    });
+    tx();
+
+    if (removeFiles) {
+      const dirs = getStudyNotebookDirs(notebook.paraCategory, notebook.folderName);
+      if (fs.existsSync(dirs.studyRoot)) {
+        fs.rmSync(dirs.studyRoot, { recursive: true, force: true });
+      }
+    }
+
+    res.json({ ok: true, deletedAt: now, removeFiles });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao excluir caderno.' });
+  }
+});
+
+app.post('/api/study/notebooks/:id/pdf', (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const notebook = db.prepare(`
+      SELECT id, subject, para_category AS paraCategory, folder_name AS folderName
+      FROM study_notebooks
+      WHERE id = ?
+    `).get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+    resequenceStudyPagesByFileName(notebookId, new Date().toISOString());
+
+    const pages = db.prepare(`
+      SELECT image_path AS imagePath
+      FROM study_pages
+      WHERE notebook_id = ?
+      ORDER BY page_order ASC, id ASC
+    `).all(notebookId);
+    if (!pages.length) {
+      return res.status(400).json({ error: 'Sem paginas para gerar PDF.' });
+    }
+
+    const notebookDir = ensureStudyNotebookFolders(notebook.paraCategory, notebook.folderName).baseDir;
+    const stem = sanitizeFileName(notebook.subject || `caderno_${notebookId}`);
+    const outputPath = path.join(notebookDir, `${stem}.pdf`);
+    buildPdfFromImages(pages.map((p) => p.imagePath), outputPath);
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE study_notebooks
+      SET generated_pdf_path = ?, updated_at = ?
+      WHERE id = ?
+    `).run(outputPath, now, notebookId);
+
+    res.json({ ok: true, pdfPath: outputPath, pdfUrl: toOpenFileUrl(outputPath) });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: err.message || 'Falha ao gerar PDF.' });
+  }
+});
+
+app.post('/api/study/notebooks/:id/ocr', async (req, res) => {
+  try {
+    if (!OPENAI_API_KEY) {
+      return res.status(400).json({ error: 'Configure OPENAI_API_KEY para usar OCR.' });
+    }
+    const notebookId = Number(req.params.id);
+    const pages = db.prepare(`
+      SELECT id, image_path AS imagePath
+      FROM study_pages
+      WHERE notebook_id = ?
+      ORDER BY page_order ASC, id ASC
+    `).all(notebookId);
+    if (!pages.length) {
+      return res.status(400).json({ error: 'Sem paginas para OCR.' });
+    }
+
+    const updatePage = db.prepare('UPDATE study_pages SET ocr_text = ?, updated_at = ? WHERE id = ?');
+    const now = new Date().toISOString();
+    let processed = 0;
+
+    for (const page of pages) {
+      const ext = path.extname(page.imagePath).toLowerCase();
+      if (!OCR_SUPPORTED_EXT.has(ext)) {
+        continue;
+      }
+      const text = await extractTextFromImage(page.imagePath);
+      updatePage.run(text, now, page.id);
+      processed += 1;
+    }
+
+    db.prepare('UPDATE study_notebooks SET updated_at = ? WHERE id = ?').run(now, notebookId);
+    res.json({ ok: true, processed });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: err.message || 'Falha no OCR.' });
+  }
+});
+
+app.get('/api/study/search', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.status(400).json({ error: 'Informe uma palavra para pesquisa.' });
+    }
+    const term = `%${q}%`;
+    const rows = db.prepare(`
+      SELECT p.id, p.page_order AS pageOrder, p.ocr_text AS ocrText, p.image_path AS imagePath,
+             n.id AS notebookId, n.subject, n.para_category AS paraCategory, n.folder_name AS folderName
+      FROM study_pages p
+      JOIN study_notebooks n ON n.id = p.notebook_id
+      WHERE p.ocr_text LIKE ?
+      ORDER BY n.updated_at DESC, p.page_order ASC
+      LIMIT 80
+    `).all(term);
+
+    res.json(rows.map((row) => ({
+      ...row,
+      imageUrl: toOpenFileUrl(row.imagePath)
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha na pesquisa OCR.' });
+  }
+});
+
+app.post('/api/study/notebooks/:id/summarize', async (req, res) => {
+  try {
+    if (!OPENAI_API_KEY) {
+      return res.status(400).json({ error: 'Configure OPENAI_API_KEY para usar resumo com ChatGPT.' });
+    }
+    const notebookId = Number(req.params.id);
+    const notebook = db.prepare(`
+      SELECT id, subject, para_category AS paraCategory, folder_name AS folderName
+      FROM study_notebooks
+      WHERE id = ?
+    `).get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+
+    const rows = db.prepare(`
+      SELECT page_order AS pageOrder, ocr_text AS ocrText
+      FROM study_pages
+      WHERE notebook_id = ?
+      ORDER BY page_order ASC
+    `).all(notebookId);
+    const blocks = rows.map((row) => row.ocrText ? `[Pagina ${row.pageOrder}]\n${row.ocrText}` : '').filter(Boolean);
+    if (!blocks.length) {
+      return res.status(400).json({ error: 'Rode o OCR antes de resumir.' });
+    }
+
+    const content = blocks.join('\n\n').slice(0, 120000);
+    const ai = await summarizeStudyContent(notebook.subject, content);
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE study_notebooks
+      SET generated_summary = ?, generated_flashcards = ?, updated_at = ?
+      WHERE id = ?
+    `).run(ai.summary, ai.flashcardsRaw, now, notebookId);
+
+    res.json({
+      ok: true,
+      summary: ai.summary,
+      flashcardsRaw: ai.flashcardsRaw
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: err.message || 'Falha ao resumir com ChatGPT.' });
+  }
+});
+
+app.post('/api/study/notebooks/:id/send-to-memory', (req, res) => {
+  try {
+    const notebookId = Number(req.params.id);
+    const notebook = db.prepare(`
+      SELECT id, subject, para_category AS paraCategory, folder_name AS folderName,
+             generated_summary AS generatedSummary, generated_flashcards AS generatedFlashcards,
+             generated_pdf_path AS generatedPdfPath
+      FROM study_notebooks
+      WHERE id = ?
+    `).get(notebookId);
+    if (!notebook) {
+      return res.status(404).json({ error: 'Caderno nao encontrado.' });
+    }
+    const summaryInput = String(req.body.summary || '').trim();
+    const flashcardsInput = String(req.body.flashcardsRaw || '').trim();
+    const finalSummary = summaryInput || String(notebook.generatedSummary || '').trim();
+    const finalFlashcards = flashcardsInput || String(notebook.generatedFlashcards || '').trim();
+    if (!finalSummary) {
+      return res.status(400).json({ error: 'Escreva o resumo manual antes de enviar para memorizacao.' });
+    }
+
+    const now = new Date();
+    const nextReview = addDays(now, REVIEW_INTERVALS[0]);
+    const notePath = writeStudySummaryNote(notebook.paraCategory, notebook.folderName, notebook.subject, finalSummary);
+    const filePath = notebook.generatedPdfPath && fs.existsSync(notebook.generatedPdfPath)
+      ? notebook.generatedPdfPath
+      : notePath;
+
+    const result = db.prepare(`
+      INSERT INTO summaries (title, para_category, file_path, note_path, created_at, release_at, current_step, next_review_at, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+    `).run(
+      notebook.subject,
+      notebook.paraCategory,
+      filePath,
+      notePath,
+      now.toISOString(),
+      startOfDayISO(now),
+      0,
+      startOfDayISO(nextReview)
+    );
+    const summaryId = Number(result.lastInsertRowid);
+
+    const cards = parseFlashcards(finalFlashcards || '');
+    const insertCard = db.prepare(`
+      INSERT INTO flashcards (summary_id, prompt, answer, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    for (const card of cards) {
+      insertCard.run(summaryId, card.prompt, card.answer, now.toISOString());
+    }
+
+    db.prepare(`
+      UPDATE study_notebooks
+      SET linked_summary_id = ?, generated_summary = ?, generated_flashcards = ?, updated_at = ?
+      WHERE id = ?
+    `).run(summaryId, finalSummary, finalFlashcards || null, now.toISOString(), notebookId);
+
+    res.json({ ok: true, summaryId, flashcardsCount: cards.length });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: err.message || 'Falha ao enviar para memorizacao.' });
+  }
+});
+
 app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
   try {
     const title = (req.body.title || '').trim();
@@ -754,9 +1496,20 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     }
 
     let filePath = null;
+    let notePath = null;
 
     if (req.file) {
       filePath = req.file.path;
+      if (summaryText) {
+        const target = path.dirname(req.file.path);
+        const sourceStem = fileNameInput || path.parse(req.file.originalname || '').name || title;
+        const stem = sanitizeFileName(sourceStem);
+        const finalFileName = createUniqueFileName(target, `${stem}_resumo.md`);
+        const fullPath = path.join(target, finalFileName);
+        const content = buildSummaryTemplate(title, summaryText);
+        fs.writeFileSync(fullPath, content, 'utf8');
+        notePath = fullPath;
+      }
     } else if (summaryText) {
       const { target } = resolveParaTargetFolder(para, folderName);
       const stem = sanitizeFileName(fileNameInput || title);
@@ -779,12 +1532,13 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     const nextReview = addDays(baseForSchedule, REVIEW_INTERVALS[0]);
 
     const result = db.prepare(`
-      INSERT INTO summaries (title, para_category, file_path, created_at, release_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      INSERT INTO summaries (title, para_category, file_path, note_path, created_at, release_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
     `).run(
       title,
       para,
       filePath,
+      notePath,
       created.toISOString(),
       launchDate ? startOfDayISO(launchDate) : startOfDayISO(created),
       0,
@@ -888,19 +1642,29 @@ app.post('/api/summaries/:id/archive', (req, res) => {
     return res.json({ ok: true });
   }
 
+  const currentFilePath = normalizeSummaryFilePath(item.id, item.file_path);
+  const currentNotePath = normalizeSummaryNotePath(item.id, item.note_path);
   const targetDir = path.join(VAULT_DIR, PARA_MAP.archives);
-  const fileName = path.basename(item.file_path);
-  const target = path.join(targetDir, fileName);
+  const fileName = path.basename(currentFilePath || item.file_path || `resumo_${id}.md`);
+  const target = path.join(targetDir, createUniqueFileName(targetDir, fileName));
+  let noteTarget = currentNotePath || item.note_path || null;
 
-  if (fs.existsSync(item.file_path) && item.file_path !== target) {
-    fs.renameSync(item.file_path, target);
+  if (currentFilePath && currentFilePath !== target) {
+    fs.renameSync(currentFilePath, target);
+  }
+  if (currentNotePath) {
+    const noteName = path.basename(currentNotePath);
+    noteTarget = path.join(targetDir, createUniqueFileName(targetDir, noteName));
+    if (currentNotePath !== noteTarget) {
+      fs.renameSync(currentNotePath, noteTarget);
+    }
   }
 
   db.prepare(`
     UPDATE summaries
-    SET status = 'archived', para_category = 'archives', file_path = ?
+    SET status = 'archived', para_category = 'archives', file_path = ?, note_path = ?
     WHERE id = ?
-  `).run(target, id);
+  `).run(target, noteTarget, id);
 
   res.json({ ok: true });
 });
@@ -923,8 +1687,15 @@ app.delete('/api/summaries/:id', (req, res) => {
     });
     tx();
 
-    if (removeFile && summary.file_path && fs.existsSync(summary.file_path)) {
-      fs.unlinkSync(summary.file_path);
+    if (removeFile) {
+      const filePath = normalizeSummaryFilePath(summary.id, summary.file_path);
+      const notePath = normalizeSummaryNotePath(summary.id, summary.note_path);
+      if (filePath) {
+        fs.unlinkSync(filePath);
+      }
+      if (notePath && notePath !== filePath) {
+        fs.unlinkSync(notePath);
+      }
     }
 
     res.json({ ok: true, removedFile: removeFile });
@@ -957,6 +1728,411 @@ function ensureDirs() {
   }
 }
 
+function ensureStudyNotebookFolders(paraCategory, folderName) {
+  const dirs = getStudyNotebookDirs(paraCategory, folderName);
+  const baseDir = dirs.studyRoot;
+  const pagesDir = dirs.pagesRoot;
+  if (!fs.existsSync(baseDir)) {
+    fs.mkdirSync(baseDir, { recursive: true });
+  }
+  if (!fs.existsSync(pagesDir)) {
+    fs.mkdirSync(pagesDir, { recursive: true });
+  }
+  return { baseDir, pagesDir };
+}
+
+function ensureStudyPagesFolder(paraCategory, folderName) {
+  return ensureStudyNotebookFolders(paraCategory, folderName).pagesDir;
+}
+
+function getStudyNotebookDirs(paraCategory, folderName) {
+  const para = normalizePara(paraCategory);
+  const paraRoot = path.join(VAULT_DIR, PARA_MAP[para]);
+  const cleanFolder = normalizeStudyFolderName(folderName, folderName || 'materia');
+  const notebookRoot = cleanFolder ? path.join(paraRoot, cleanFolder) : paraRoot;
+  const studyRoot = notebookRoot;
+  const pagesRoot = notebookRoot;
+  if (!isInsideBase(paraRoot, notebookRoot)) {
+    throw new Error('Pasta do caderno invalida.');
+  }
+  return { paraRoot, notebookRoot, studyRoot, pagesRoot };
+}
+
+function normalizeStudyFolderName(rawFolderName, fallbackSubject) {
+  const subjectRaw = String(fallbackSubject || 'materia').trim() || 'materia';
+  const subjectSafe = sanitizeFileName(subjectRaw);
+  let moduleInput = String(rawFolderName || '').trim();
+  if (!moduleInput) {
+    return subjectSafe;
+  }
+
+  moduleInput = moduleInput
+    .replace(/!materia/gi, '')
+    .replace(/^[\\/]+|[\\/]+$/g, '')
+    .trim();
+
+  const modulePath = sanitizeFolderPath(moduleInput);
+  if (!modulePath) {
+    return subjectSafe;
+  }
+
+  const parts = modulePath.split(path.sep).filter(Boolean);
+  const first = String(parts[0] || '').toLowerCase();
+  if (first === subjectSafe.toLowerCase()) {
+    return parts.join(path.sep);
+  }
+
+  return [subjectSafe, ...parts].join(path.sep);
+}
+
+function normalizeStudySubject(rawSubject) {
+  const subjectRaw = String(rawSubject || '').trim();
+  const match = subjectRaw.match(/^(.*?)[\s_-]+apostila[\s_-]*(\d+)$/i);
+  if (!match) {
+    return {
+      subject: subjectRaw || 'Materia',
+      inferredModule: ''
+    };
+  }
+
+  const baseSubject = String(match[1] || '').trim() || subjectRaw;
+  const moduleNum = String(match[2] || '').trim();
+  return {
+    subject: baseSubject,
+    inferredModule: moduleNum ? `Apostila_${moduleNum}` : ''
+  };
+}
+
+function resequenceStudyPages(notebookId, nowIso) {
+  const rows = db.prepare(`
+    SELECT id
+    FROM study_pages
+    WHERE notebook_id = ?
+    ORDER BY page_order ASC, id ASC
+  `).all(notebookId);
+  const update = db.prepare('UPDATE study_pages SET page_order = ?, updated_at = ? WHERE id = ?');
+  for (let i = 0; i < rows.length; i += 1) {
+    update.run(i + 1, nowIso, rows[i].id);
+  }
+}
+
+function resequenceStudyPagesByFileName(notebookId, nowIso) {
+  const rows = db.prepare(`
+    SELECT id, image_path AS imagePath
+    FROM study_pages
+    WHERE notebook_id = ?
+  `).all(notebookId);
+
+  const sorted = rows.slice().sort((a, b) => {
+    const aParts = extractOrderFromFileName(a.imagePath);
+    const bParts = extractOrderFromFileName(b.imagePath);
+    if (aParts.order !== bParts.order) {
+      return aParts.order - bParts.order;
+    }
+    const nameCompare = aParts.base.localeCompare(bParts.base, 'pt-BR', { sensitivity: 'base', numeric: true });
+    if (nameCompare !== 0) {
+      return nameCompare;
+    }
+    return a.id - b.id;
+  });
+
+  const update = db.prepare('UPDATE study_pages SET page_order = ?, updated_at = ? WHERE id = ?');
+  for (let i = 0; i < sorted.length; i += 1) {
+    update.run(i + 1, nowIso, sorted[i].id);
+  }
+}
+
+function extractOrderFromFileName(filePath) {
+  const base = path.parse(String(filePath || '')).name || '';
+  const match = base.match(/\d+/);
+  if (!match) {
+    return { order: Number.MAX_SAFE_INTEGER, base: base.toLowerCase() };
+  }
+  const parsed = Number(match[0]);
+  return {
+    order: Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER,
+    base: base.toLowerCase()
+  };
+}
+
+function sanitizeImageExtension(ext) {
+  const lower = String(ext || '').toLowerCase();
+  return OCR_SUPPORTED_EXT.has(lower) ? lower : '.jpg';
+}
+
+function toOpenFileUrl(fullPath) {
+  const normalized = String(fullPath || '').replace(/\\/g, '/');
+  const marker = '/KnowledgeOSVault/';
+  const idx = normalized.indexOf(marker);
+  if (idx === -1) {
+    return '#';
+  }
+  const relative = normalized.slice(idx + marker.length);
+  return `/vault/${relative}`;
+}
+
+function writeStudySummaryNote(paraCategory, folderName, subject, summary) {
+  const { baseDir } = ensureStudyNotebookFolders(paraCategory, folderName);
+  const stem = sanitizeFileName(subject || 'resumo_estudo');
+  const notePath = path.join(baseDir, `${stem}_resumo_chatgpt.md`);
+  const content = `# ${subject}\n\n## Resumo\n${summary}\n`;
+  fs.writeFileSync(notePath, content, 'utf8');
+  return notePath;
+}
+
+function buildPdfFromImages(imagePaths, outputPath) {
+  if (!Array.isArray(imagePaths) || !imagePaths.length) {
+    throw new Error('Nenhuma imagem para converter em PDF.');
+  }
+
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const objects = [];
+  let missingCount = 0;
+  let unsupportedCount = 0;
+
+  function addObject(content) {
+    objects.push(content);
+    return objects.length;
+  }
+
+  const pageRefs = [];
+  for (const imagePath of imagePaths) {
+    if (!fs.existsSync(imagePath) || !fs.statSync(imagePath).isFile()) {
+      missingCount += 1;
+      continue;
+    }
+    const ext = path.extname(imagePath).toLowerCase();
+    if (!['.jpg', '.jpeg'].includes(ext)) {
+      unsupportedCount += 1;
+      continue;
+    }
+    const buffer = fs.readFileSync(imagePath);
+    const dims = getJpegDimensions(buffer);
+    if (!dims) {
+      continue;
+    }
+
+    const imageRef = addObject(makePdfImageObject(buffer, dims.width, dims.height));
+    const fit = fitImageInsidePage(dims.width, dims.height, pageWidth, pageHeight, 24);
+    const contentStream = `q\n${fit.width.toFixed(2)} 0 0 ${fit.height.toFixed(2)} ${fit.x.toFixed(2)} ${fit.y.toFixed(2)} cm\n/Im0 Do\nQ\n`;
+    const contentRef = addObject(makePdfStreamObject(Buffer.from(contentStream, 'utf8')));
+    const pageRef = addObject(`<< /Type /Page /Parent PAGES_REF 0 R /MediaBox [0 0 ${pageWidth.toFixed(2)} ${pageHeight.toFixed(2)}] /Resources << /XObject << /Im0 ${imageRef} 0 R >> >> /Contents ${contentRef} 0 R >>`);
+    pageRefs.push(pageRef);
+  }
+
+  if (unsupportedCount > 0) {
+    throw new Error(`Existem ${unsupportedCount} foto(s) fora de JPG/JPEG. Reenvie as paginas para normalizar antes de gerar PDF.`);
+  }
+  if (missingCount > 0) {
+    throw new Error(`Existem ${missingCount} foto(s) ausentes. Atualize o caderno e tente novamente.`);
+  }
+  if (!pageRefs.length) {
+    throw new Error('Nenhuma pagina valida para PDF. Use fotos JPG/JPEG.');
+  }
+
+  const pagesRef = addObject(`<< /Type /Pages /Count ${pageRefs.length} /Kids [${pageRefs.map((ref) => `${ref} 0 R`).join(' ')}] >>`);
+  const catalogRef = addObject(`<< /Type /Catalog /Pages ${pagesRef} 0 R >>`);
+
+  objects.forEach((obj, idx) => {
+    if (typeof obj === 'string') {
+      objects[idx] = obj.replaceAll('PAGES_REF 0 R', `${pagesRef} 0 R`);
+    }
+  });
+
+  const header = Buffer.from('%PDF-1.4\n%\xFF\xFF\xFF\xFF\n', 'binary');
+  const chunks = [header];
+  const offsets = [0];
+  let runningLength = header.length;
+
+  for (let i = 0; i < objects.length; i += 1) {
+    offsets.push(runningLength);
+    const objectBody = typeof objects[i] === 'string' ? Buffer.from(objects[i], 'binary') : objects[i];
+    const prefix = Buffer.from(`${i + 1} 0 obj\n`, 'binary');
+    const suffix = Buffer.from('\nendobj\n', 'binary');
+    chunks.push(prefix, objectBody, suffix);
+    runningLength += prefix.length + objectBody.length + suffix.length;
+  }
+
+  const xrefOffset = runningLength;
+  let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i += 1) {
+    xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  const trailer = `trailer\n<< /Size ${objects.length + 1} /Root ${catalogRef} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  chunks.push(Buffer.from(xref, 'binary'), Buffer.from(trailer, 'binary'));
+  fs.writeFileSync(outputPath, Buffer.concat(chunks));
+}
+
+function makePdfImageObject(imageBuffer, width, height) {
+  const header = `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBuffer.length} >>\nstream\n`;
+  const footer = '\nendstream';
+  return Buffer.concat([Buffer.from(header, 'binary'), imageBuffer, Buffer.from(footer, 'binary')]);
+}
+
+function makePdfStreamObject(streamBuffer) {
+  const header = `<< /Length ${streamBuffer.length} >>\nstream\n`;
+  const footer = '\nendstream';
+  return Buffer.concat([Buffer.from(header, 'binary'), streamBuffer, Buffer.from(footer, 'binary')]);
+}
+
+function fitImageInsidePage(imgW, imgH, pageW, pageH, margin) {
+  const usableW = Math.max(1, pageW - (margin * 2));
+  const usableH = Math.max(1, pageH - (margin * 2));
+  const scale = Math.min(usableW / imgW, usableH / imgH);
+  const width = imgW * scale;
+  const height = imgH * scale;
+  return {
+    width,
+    height,
+    x: (pageW - width) / 2,
+    y: (pageH - height) / 2
+  };
+}
+
+function getJpegDimensions(buffer) {
+  let offset = 2;
+  while (offset < buffer.length) {
+    if (buffer[offset] !== 0xFF) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    if ([0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF].includes(marker)) {
+      const height = buffer.readUInt16BE(offset + 5);
+      const width = buffer.readUInt16BE(offset + 7);
+      return { width, height };
+    }
+    const blockLength = buffer.readUInt16BE(offset + 2);
+    offset += 2 + blockLength;
+  }
+  return null;
+}
+
+async function extractTextFromImage(imagePath) {
+  const imageBuffer = fs.readFileSync(imagePath);
+  const mime = mimeTypeFromExtension(path.extname(imagePath).toLowerCase());
+  const imageBase64 = imageBuffer.toString('base64');
+  const prompt = 'Extraia todo o texto legivel desta pagina de apostila em portugues. Responda somente com o texto corrido, sem comentarios.';
+  const payload = {
+    model: OPENAI_MODEL,
+    input: [
+      {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: prompt },
+          { type: 'input_image', image_url: `data:${mime};base64,${imageBase64}` }
+        ]
+      }
+    ]
+  };
+
+  const json = await callOpenAIResponses(payload);
+  return extractOutputText(json).trim();
+}
+
+async function summarizeStudyContent(subject, rawText) {
+  const prompt = [
+    'Voce vai resumir apostilas para estudo.',
+    'Retorne JSON com o formato: {"summary":"...","flashcards":[{"prompt":"...","answer":"..."}]}',
+    'Regras:',
+    '- summary em portugues, objetivo, com no maximo 1200 palavras.',
+    '- flashcards entre 8 e 20 itens.',
+    '- cada flashcard deve ser pergunta e resposta direta.',
+    '- nao invente fatos fora do texto.'
+  ].join('\n');
+
+  const payload = {
+    model: OPENAI_MODEL,
+    input: [
+      {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: `${prompt}\n\nMateria: ${subject}\n\nTexto OCR:\n${rawText}` }
+        ]
+      }
+    ]
+  };
+
+  const json = await callOpenAIResponses(payload);
+  const text = extractOutputText(json).trim();
+  const parsed = safeParseJsonBlock(text);
+  if (!parsed || typeof parsed.summary !== 'string') {
+    throw new Error('Resposta do ChatGPT em formato invalido.');
+  }
+
+  const flashcards = Array.isArray(parsed.flashcards)
+    ? parsed.flashcards
+      .map((card) => ({
+        prompt: String(card?.prompt || '').trim().slice(0, 500),
+        answer: String(card?.answer || '').trim().slice(0, 1000)
+      }))
+      .filter((card) => card.prompt && card.answer)
+      .slice(0, 30)
+    : [];
+
+  return {
+    summary: parsed.summary.trim(),
+    flashcardsRaw: flashcards.map((card) => `${card.prompt}::${card.answer}`).join('\n')
+  };
+}
+
+function safeParseJsonBlock(value) {
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    const match = String(value).match(/\{[\s\S]*\}/);
+    if (!match) {
+      return null;
+    }
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function callOpenAIResponses(payload) {
+  const response = await fetch(OPENAI_RESPONSES_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Falha OpenAI (${response.status}): ${detail || 'sem detalhes'}`);
+  }
+  return response.json();
+}
+
+function extractOutputText(responseJson) {
+  if (typeof responseJson?.output_text === 'string' && responseJson.output_text.trim()) {
+    return responseJson.output_text;
+  }
+  const parts = [];
+  const output = Array.isArray(responseJson?.output) ? responseJson.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const chunk of content) {
+      if (typeof chunk?.text === 'string') {
+        parts.push(chunk.text);
+      }
+    }
+  }
+  return parts.join('\n').trim();
+}
+
+function mimeTypeFromExtension(ext) {
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
 function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS summaries (
@@ -964,6 +2140,7 @@ function initDb() {
       title TEXT NOT NULL,
       para_category TEXT NOT NULL,
       file_path TEXT NOT NULL,
+      note_path TEXT,
       created_at TEXT NOT NULL,
       release_at TEXT,
       current_step INTEGER NOT NULL DEFAULT 0,
@@ -1008,6 +2185,38 @@ function initDb() {
       created_at TEXT NOT NULL,
       resolved_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS metacog_risk_overrides (
+      summary_id INTEGER PRIMARY KEY,
+      risk_override INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(summary_id) REFERENCES summaries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS study_notebooks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject TEXT NOT NULL,
+      para_category TEXT NOT NULL,
+      folder_name TEXT NOT NULL,
+      generated_pdf_path TEXT,
+      generated_summary TEXT,
+      generated_flashcards TEXT,
+      linked_summary_id INTEGER,
+      summary_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS study_pages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      notebook_id INTEGER NOT NULL,
+      page_order INTEGER NOT NULL,
+      image_path TEXT NOT NULL,
+      ocr_text TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(notebook_id) REFERENCES study_notebooks(id)
+    );
   `);
 
   ensureColumn('reviews', 'confidence', 'INTEGER');
@@ -1019,6 +2228,14 @@ function initDb() {
   ensureColumn('summaries', 'loci_room', 'TEXT');
   ensureColumn('summaries', 'loci_hook', 'TEXT');
   ensureColumn('summaries', 'release_at', 'TEXT');
+  ensureColumn('summaries', 'note_path', 'TEXT');
+  ensureColumn('metacog_risk_overrides', 'risk_override', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('metacog_risk_overrides', 'updated_at', 'TEXT');
+  ensureColumn('study_notebooks', 'generated_pdf_path', 'TEXT');
+  ensureColumn('study_notebooks', 'generated_summary', 'TEXT');
+  ensureColumn('study_notebooks', 'generated_flashcards', 'TEXT');
+  ensureColumn('study_notebooks', 'linked_summary_id', 'INTEGER');
+  ensureColumn('study_notebooks', 'summary_path', 'TEXT');
 }
 
 function normalizePara(value) {
@@ -1145,6 +2362,100 @@ function resolveInsideBase(baseDir, relativePath) {
   return target;
 }
 
+function resolveSummaryFilePath(rawPath) {
+  const filePath = String(rawPath || '').trim();
+  if (!filePath) {
+    return null;
+  }
+
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    return filePath;
+  }
+
+  const marker = '/knowledgeosvault/';
+  const normalized = filePath.replace(/\\/g, '/');
+  const idx = normalized.toLowerCase().indexOf(marker);
+  if (idx === -1) {
+    return null;
+  }
+
+  const relative = normalized.slice(idx + marker.length).replace(/^\/+/, '');
+  if (!relative) {
+    return null;
+  }
+
+  try {
+    const fallback = resolveInsideBase(VAULT_DIR, relative);
+    if (fs.existsSync(fallback) && fs.statSync(fallback).isFile()) {
+      return fallback;
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return null;
+}
+
+function normalizeSummaryPath(summaryId, columnName, rawPath) {
+  const resolved = resolveSummaryFilePath(rawPath);
+  if (!resolved) {
+    return null;
+  }
+
+  const current = String(rawPath || '');
+  if (summaryId && current !== resolved && ['file_path', 'note_path'].includes(columnName)) {
+    db.prepare(`UPDATE summaries SET ${columnName} = ? WHERE id = ?`).run(resolved, summaryId);
+  }
+  return resolved;
+}
+
+function normalizeSummaryFilePath(summaryId, rawPath) {
+  return normalizeSummaryPath(summaryId, 'file_path', rawPath);
+}
+
+function normalizeSummaryNotePath(summaryId, rawPath) {
+  return normalizeSummaryPath(summaryId, 'note_path', rawPath);
+}
+
+function isTextFilePath(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  return ext === '.md' || ext === '.txt';
+}
+
+function resolveEditableSummaryTextPath(summary) {
+  const notePath = normalizeSummaryNotePath(summary.id, summary.notePath || summary.note_path);
+  if (notePath && isTextFilePath(notePath)) {
+    return notePath;
+  }
+
+  const mainPath = normalizeSummaryFilePath(summary.id, summary.filePath || summary.file_path);
+  if (mainPath && isTextFilePath(mainPath)) {
+    return mainPath;
+  }
+
+  return null;
+}
+
+function ensureSummaryNotePath(summaryId, rawFilePath, rawNotePath) {
+  const existingNote = normalizeSummaryNotePath(summaryId, rawNotePath);
+  if (existingNote && isTextFilePath(existingNote)) {
+    return existingNote;
+  }
+
+  const mainPath = normalizeSummaryFilePath(summaryId, rawFilePath);
+  if (!mainPath || !fs.existsSync(mainPath) || !fs.statSync(mainPath).isFile()) {
+    return null;
+  }
+
+  const dir = path.dirname(mainPath);
+  const stem = sanitizeFileName(path.parse(mainPath).name || `resumo_${summaryId}`);
+  const noteName = createUniqueFileName(dir, `${stem}_resumo.md`);
+  const notePath = path.join(dir, noteName);
+
+  db.prepare('UPDATE summaries SET note_path = ? WHERE id = ?').run(notePath, summaryId);
+  return notePath;
+}
+
 function isInsideBase(baseDir, targetPath) {
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.resolve(targetPath);
@@ -1162,6 +2473,32 @@ function parseDateOnly(value) {
   }
   const d = new Date(`${clean}T00:00:00`);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseYearMonth(value) {
+  const clean = String(value || '').trim();
+  const match = clean.match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return null;
+  }
+
+  return {
+    year,
+    monthIndex: month - 1
+  };
+}
+
+function toDateOnly(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function listFoldersRecursive(baseDir, maxDepth) {
@@ -1195,7 +2532,7 @@ function listFoldersRecursive(baseDir, maxDepth) {
 }
 
 function isIllusionOfCompetence(grade, confidence) {
-  return Number.isFinite(confidence) && confidence >= 75 && grade !== 'good';
+  return evaluateMetacogRisk(grade, confidence).illusionDetected;
 }
 
 function calculateAdaptiveSchedule(item, grade, confidence, now) {
@@ -1269,14 +2606,14 @@ function computeWeeklyGoal(referenceDate) {
   const weekStart = startOfWeek(now);
   const weekEnd = addDays(weekStart, 7);
   const next7 = addDays(now, 7).toISOString();
-  const todayStart = startOfDayISO(now);
+  const tomorrowStart = startOfDayISO(addDays(now, 1));
 
   const active = db.prepare(`SELECT COUNT(*) AS total FROM summaries WHERE status='active'`).get().total;
   const dueToday = db.prepare(`
     SELECT COUNT(*) AS total
     FROM summaries
-    WHERE status='active' AND next_review_at <= ?
-  `).get(todayStart).total;
+    WHERE status='active' AND next_review_at < ?
+  `).get(tomorrowStart).total;
   const dueNext7 = db.prepare(`
     SELECT COUNT(*) AS total
     FROM summaries
@@ -1324,6 +2661,47 @@ function computeWeeklyGoal(referenceDate) {
   };
 }
 
+function evaluateMetacogRisk(grade, confidenceRaw) {
+  const confidence = Number.isFinite(Number(confidenceRaw)) ? Number(confidenceRaw) : null;
+  const normalizedConfidence = confidence === null ? 0.5 : clamp(confidence / 100, 0, 1);
+  const normalizedGradeRisk = grade === 'forgot' ? 1 : grade === 'partial' ? 0.6 : 0.05;
+  const riskScore = clamp((normalizedGradeRisk * 0.75) + (normalizedConfidence * 0.25), 0, 1);
+
+  if (grade === 'forgot') {
+    return {
+      riskFlag: true,
+      illusionDetected: confidence !== null && confidence >= 70,
+      reason: 'Esqueceu o conteudo na ultima revisao.',
+      riskScore
+    };
+  }
+
+  if (grade === 'partial' && confidence !== null && confidence >= 60) {
+    return {
+      riskFlag: true,
+      illusionDetected: confidence >= 75,
+      reason: 'Recordacao parcial com confianca moderada/alta.',
+      riskScore
+    };
+  }
+
+  if (confidence !== null && confidence >= 75 && grade !== 'good') {
+    return {
+      riskFlag: true,
+      illusionDetected: true,
+      reason: 'Confianca alta com erro na revisao.',
+      riskScore
+    };
+  }
+
+  return {
+    riskFlag: riskScore >= 0.65,
+    illusionDetected: confidence !== null && confidence >= 75 && grade !== 'good',
+    reason: riskScore >= 0.65 ? 'Padrao de risco detectado pela pontuacao combinada.' : 'Sem sinais criticos no ultimo ciclo.',
+    riskScore
+  };
+}
+
 function classifyCognitiveLoad(avgRecallSeconds, errorRate) {
   if (avgRecallSeconds >= 80 || errorRate >= 0.45) return 'alta';
   if (avgRecallSeconds >= 50 || errorRate >= 0.25) return 'media';
@@ -1357,7 +2735,10 @@ function buildLogicalExport() {
     summaries: db.prepare('SELECT * FROM summaries ORDER BY id ASC').all(),
     reviews: db.prepare('SELECT * FROM reviews ORDER BY id ASC').all(),
     flashcards: db.prepare('SELECT * FROM flashcards ORDER BY id ASC').all(),
-    metacogAlerts: db.prepare('SELECT * FROM metacog_alerts ORDER BY id ASC').all()
+    metacogAlerts: db.prepare('SELECT * FROM metacog_alerts ORDER BY id ASC').all(),
+    metacogRiskOverrides: db.prepare('SELECT * FROM metacog_risk_overrides ORDER BY summary_id ASC').all(),
+    studyNotebooks: db.prepare('SELECT * FROM study_notebooks ORDER BY id ASC').all(),
+    studyPages: db.prepare('SELECT * FROM study_pages ORDER BY id ASC').all()
   };
 }
 
@@ -1366,8 +2747,14 @@ function restoreLogicalExport(payload) {
   const reviews = Array.isArray(payload?.reviews) ? payload.reviews : [];
   const flashcards = Array.isArray(payload?.flashcards) ? payload.flashcards : [];
   const metacogAlerts = Array.isArray(payload?.metacogAlerts) ? payload.metacogAlerts : [];
+  const metacogRiskOverrides = Array.isArray(payload?.metacogRiskOverrides) ? payload.metacogRiskOverrides : [];
+  const studyNotebooks = Array.isArray(payload?.studyNotebooks) ? payload.studyNotebooks : [];
+  const studyPages = Array.isArray(payload?.studyPages) ? payload.studyPages : [];
 
   const tx = db.transaction(() => {
+    db.prepare('DELETE FROM study_pages').run();
+    db.prepare('DELETE FROM study_notebooks').run();
+    db.prepare('DELETE FROM metacog_risk_overrides').run();
     db.prepare('DELETE FROM metacog_alerts').run();
     db.prepare('DELETE FROM flashcards').run();
     db.prepare('DELETE FROM reviews').run();
@@ -1375,15 +2762,18 @@ function restoreLogicalExport(payload) {
 
     const insertSummary = db.prepare(`
       INSERT INTO summaries (
-        id, title, para_category, file_path, created_at, release_at, current_step,
+        id, title, para_category, file_path, note_path, created_at, release_at, current_step,
         next_review_at, status, last_grade, loci_palace, loci_room, loci_hook
       ) VALUES (
-        @id, @title, @para_category, @file_path, @created_at, @release_at, @current_step,
+        @id, @title, @para_category, @file_path, @note_path, @created_at, @release_at, @current_step,
         @next_review_at, @status, @last_grade, @loci_palace, @loci_room, @loci_hook
       )
     `);
     for (const row of summaries) {
-      insertSummary.run(row);
+      insertSummary.run({
+        ...row,
+        note_path: row.note_path ?? null
+      });
     }
 
     const insertReview = db.prepare(`
@@ -1413,6 +2803,38 @@ function restoreLogicalExport(payload) {
     `);
     for (const row of metacogAlerts) {
       insertAlert.run(row);
+    }
+
+    const insertRiskOverride = db.prepare(`
+      INSERT INTO metacog_risk_overrides (summary_id, risk_override, updated_at)
+      VALUES (@summary_id, @risk_override, @updated_at)
+    `);
+    for (const row of metacogRiskOverrides) {
+      insertRiskOverride.run(row);
+    }
+
+    const insertNotebook = db.prepare(`
+      INSERT INTO study_notebooks (
+        id, subject, para_category, folder_name, generated_pdf_path, generated_summary,
+        generated_flashcards, linked_summary_id, summary_path, created_at, updated_at
+      ) VALUES (
+        @id, @subject, @para_category, @folder_name, @generated_pdf_path, @generated_summary,
+        @generated_flashcards, @linked_summary_id, @summary_path, @created_at, @updated_at
+      )
+    `);
+    for (const row of studyNotebooks) {
+      insertNotebook.run(row);
+    }
+
+    const insertPage = db.prepare(`
+      INSERT INTO study_pages (
+        id, notebook_id, page_order, image_path, ocr_text, created_at, updated_at
+      ) VALUES (
+        @id, @notebook_id, @page_order, @image_path, @ocr_text, @created_at, @updated_at
+      )
+    `);
+    for (const row of studyPages) {
+      insertPage.run(row);
     }
   });
 

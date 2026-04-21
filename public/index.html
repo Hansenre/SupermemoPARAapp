@@ -33,7 +33,61 @@
     </header>
 
     <main class="grid">
-      <section class="panel">
+      <section class="panel panel-full module-nav">
+        <h2>Dashboard de Entrada</h2>
+        <div id="featureNav" class="module-nav-buttons">
+          <button type="button" class="btn-secondary" data-feature-target="home">Inicio</button>
+          <button type="button" class="btn-secondary" data-feature-target="summary">Novo resumo</button>
+          <button type="button" class="btn-secondary" data-feature-target="study">Fluxo apostila</button>
+          <button type="button" class="btn-secondary" data-feature-target="review">Fila revisao</button>
+          <button type="button" class="btn-secondary" data-feature-target="library">Biblioteca</button>
+          <button type="button" class="btn-secondary" data-feature-target="metacog">Metacognicao</button>
+          <button type="button" class="btn-secondary" data-feature-target="explorer">Explorador PARA</button>
+          <button type="button" class="btn-secondary" data-feature-target="backup">Backup/Restore</button>
+        </div>
+      </section>
+
+      <section class="panel panel-full feature-section" data-feature="home">
+        <section class="hero-learning">
+          <div class="hero-overlay"></div>
+          <div class="hero-content">
+            <p class="hero-kicker">Aprendizado inteligente</p>
+            <h2>Você quer aprender de forma eficaz?</h2>
+            <p>Organize suas apostilas, memorize com consistencia e evolua com clareza em cada revisao.</p>
+            <div class="hero-actions">
+              <button type="button" data-feature-target="study">Comecar agora</button>
+              <button type="button" class="btn-secondary" data-feature-target="library">Ver minha biblioteca</button>
+            </div>
+          </div>
+          <div class="hero-brain" aria-hidden="true">🧠💡</div>
+        </section>
+
+        <div class="home-sequence">
+          <article class="sequence-step">
+            <span>1</span>
+            <div>
+              <h3>Capture e organize</h3>
+              <p>Tire fotos, salve por materia e gere o PDF em ordem.</p>
+            </div>
+          </article>
+          <article class="sequence-step">
+            <span>2</span>
+            <div>
+              <h3>Estude com revisao ativa</h3>
+              <p>Use a fila para revisar no tempo certo e fixar melhor.</p>
+            </div>
+          </article>
+          <article class="sequence-step">
+            <span>3</span>
+            <div>
+              <h3>Meça e melhore</h3>
+              <p>Acompanhe risco cognitivo e ajuste sua estrategia de memoria.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel feature-section" data-feature="summary">
         <h2>Novo Resumo</h2>
         <p class="muted" id="paraBreakdown"></p>
 
@@ -94,24 +148,114 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel panel-wide feature-section" data-feature="study">
+        <h2>Fluxo de Apostila (Foto -> PDF -> Memorizacao)</h2>
+        <div class="grid-two">
+          <div>
+            <label>Materia</label>
+            <input id="studySubject" placeholder="Ex: Biologia - Citologia" maxlength="120" />
+          </div>
+          <div>
+            <label>Categoria PARA</label>
+            <select id="studyParaCategory">
+              <option value="projects">Projects</option>
+              <option value="areas">Areas</option>
+              <option value="resources" selected>Resources</option>
+              <option value="inbox">Inbox</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid-two">
+          <div>
+            <label>Materias existentes</label>
+            <select id="studySubjectSelect"></select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="studyUseSubjectBtn" type="button" class="btn-secondary">Usar no campo Materia</button>
+          </div>
+        </div>
+        <label>Subpasta (modulo opcional)</label>
+        <input id="studyFolderName" placeholder="ex: modulo_1 ou modulo_1/unidade_2" maxlength="120" />
+        <div class="grid-two">
+          <div>
+            <label>Subpastas existentes da materia</label>
+            <select id="studyModuleSelect"></select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <div></div>
+          </div>
+        </div>
+        <div class="toolbar compact">
+          <button id="createNotebookBtn" type="button" class="btn-secondary">1) Criar/Selecionar caderno</button>
+          <p id="studyAutoSelectStatus" class="muted upload-status">Caderno selecionado automaticamente pelos campos acima.</p>
+          <div></div>
+        </div>
+        <div class="toolbar compact">
+          <button id="clearStudyPagesBtn" type="button" class="btn-danger">Limpar fotos deste caderno</button>
+          <button id="deleteNotebookBtn" type="button" class="btn-danger">Excluir caderno/pasta</button>
+          <div></div>
+        </div>
+
+        <label>Fotos das paginas (JPG/PNG/WebP)</label>
+        <input id="studyPagesInput" type="file" accept="image/*" capture="environment" multiple />
+        <div class="toolbar compact">
+          <button id="uploadStudyPagesBtn" type="button" class="btn-secondary">2) Tirar/enviar fotos e salvar paginas</button>
+          <p id="studyUploadStatus" class="muted upload-status">Pronto para enviar fotos.</p>
+          <button id="generateStudyPdfBtn" type="button" class="btn-secondary">3) Gerar PDF da apostila</button>
+          <a id="studyPdfLink" href="#" target="_blank" rel="noreferrer">Abrir PDF</a>
+        </div>
+
+        <div class="toolbar compact">
+          <button id="sendStudyToMemoryBtn" type="button">4) Enviar resumo/flashcards manuais para memorizacao</button>
+          <div></div>
+        </div>
+        <p class="muted">Preencha os campos abaixo manualmente. Esse modo nao usa API paga.</p>
+        <label>Resumo gerado</label>
+        <textarea id="studySummaryOutput" rows="8" placeholder="Escreva aqui o resumo da apostila"></textarea>
+        <label>Flashcards gerados (Pergunta::Resposta)</label>
+        <textarea id="studyFlashcardsOutput" rows="5" placeholder="Ex: O que e ohm?::Unidade de resistencia eletrica"></textarea>
+        <p id="studyNumberHint" class="muted">Ordem automatica por nome do arquivo. Exemplo: 001.jpg, 002.jpg, 003.jpg...</p>
+        <div id="studyPagesList" class="list"></div>
+      </section>
+
+      <section class="panel feature-section" data-feature="review">
         <h2>Fila de Revisao</h2>
         <div id="queue" class="list"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel panel-full feature-section" data-feature="library">
         <h2>Biblioteca</h2>
-        <div id="library" class="list"></div>
+        <div class="grid-two">
+          <div>
+            <label>Filtrar por pasta PARA</label>
+            <select id="libraryParaFilter">
+              <option value="all" selected>Todas</option>
+              <option value="projects">Projects</option>
+              <option value="areas">Areas</option>
+              <option value="resources">Resources</option>
+              <option value="inbox">Inbox</option>
+              <option value="archives">Archives</option>
+            </select>
+          </div>
+          <div></div>
+        </div>
+        <div id="library" class="library-grid"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel feature-section" data-feature="metacog">
         <h2>Metacognicao</h2>
         <p class="muted" id="cognitiveLoadText">Carga cognitiva: --</p>
         <p class="muted" id="alertsCountText">Alertas de ilusao: 0</p>
+        <p class="muted">Criterio: confianca >= 75% e nota diferente de "Lembrei bem".</p>
+        <h3>Itens monitorados</h3>
+        <div id="metacogCandidatesList" class="list"></div>
+        <h3>Alertas abertos</h3>
         <div id="alertsList" class="list"></div>
       </section>
 
-      <section class="panel panel-wide">
+      <section class="panel panel-wide feature-section" data-feature="explorer">
         <h2>Explorador PARA</h2>
 
         <div class="toolbar">
@@ -128,7 +272,7 @@
 
         <div class="toolbar compact">
           <select id="savedFoldersSelect"></select>
-          <button id="openSavedFolderBtn" type="button" class="btn-secondary">Abrir pasta salva</button>
+          <p class="muted upload-status">Selecione uma pasta salva para abrir automaticamente.</p>
           <div></div>
         </div>
 
@@ -154,7 +298,7 @@
         </div>
       </section>
 
-      <section class="panel panel-full panel-subtle">
+      <section class="panel panel-full panel-subtle feature-section" data-feature="backup">
         <h3>Backup e Restore</h3>
         <p class="muted">Opcional. Use apenas quando precisar proteger/restaurar o banco.</p>
         <div class="backup-row">
@@ -224,6 +368,12 @@
           <button id="closeWeeklyGoalModalBtn" type="button" class="btn-secondary">Fechar</button>
         </div>
         <p id="weeklyGoalSummary" class="muted"></p>
+        <div class="calendar-toolbar">
+          <button id="weeklyMonthPrevBtn" type="button" class="btn-secondary btn-small">Mes anterior</button>
+          <strong id="weeklyMonthLabel">--</strong>
+          <button id="weeklyMonthNextBtn" type="button" class="btn-secondary btn-small">Proximo mes</button>
+        </div>
+        <div id="weeklyMonthCalendar" class="month-calendar"></div>
         <div id="weeklyGoalDailyList" class="list"></div>
         <h4 id="weeklyDayDetailTitle">Dia selecionado</h4>
         <div id="weeklyDayItemsList" class="list"></div>
