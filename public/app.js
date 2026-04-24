@@ -26,18 +26,44 @@ const state = {
     pages: [],
     notebooksAll: []
   },
-  activeFeature: 'home'
+  library: {
+    cache: null,
+    cacheAt: 0,
+    cacheTtlMs: 30000,
+    search: '',
+    page: 1,
+    pageSize: 20
+  },
+  activeFeature: 'home',
+  ux: {
+    simpleMode: false,
+    onlyRiskMetacog: false,
+    pendingDeletes: {},
+    guideStep: 0
+  }
 };
+state.challengeFeedback = {};
 
 const queueEl = document.getElementById('queue');
+const reviewParaFilterEl = document.getElementById('reviewParaFilter');
+const reviewFolderFilterEl = document.getElementById('reviewFolderFilter');
 const libraryEl = document.getElementById('library');
 const libraryParaFilterEl = document.getElementById('libraryParaFilter');
+const libraryFolderFilterEl = document.getElementById('libraryFolderFilter');
+const librarySearchInputEl = document.getElementById('librarySearchInput');
+const libraryPageSizeEl = document.getElementById('libraryPageSize');
+const libraryPrevPageBtnEl = document.getElementById('libraryPrevPageBtn');
+const libraryNextPageBtnEl = document.getElementById('libraryNextPageBtn');
+const libraryPageInfoEl = document.getElementById('libraryPageInfo');
 const dueTodayEl = document.getElementById('dueToday');
 const activeTotalEl = document.getElementById('activeTotal');
 const weeklyGoalStatEl = document.getElementById('weeklyGoalStat');
+const codarXpStatEl = document.getElementById('codarXpStat');
 const weeklyGoalCardEl = document.getElementById('weeklyGoalCard');
 const paraBreakdownEl = document.getElementById('paraBreakdown');
 const cognitiveLoadTextEl = document.getElementById('cognitiveLoadText');
+const metacogParaFilterEl = document.getElementById('metacogParaFilter');
+const metacogFolderFilterEl = document.getElementById('metacogFolderFilter');
 const alertsCountTextEl = document.getElementById('alertsCountText');
 const alertsListEl = document.getElementById('alertsList');
 const metacogCandidatesListEl = document.getElementById('metacogCandidatesList');
@@ -92,6 +118,7 @@ const quickSummaryMetaEl = document.getElementById('quickSummaryMeta');
 const quickSummaryCardsEl = document.getElementById('quickSummaryCards');
 const quickSummaryPreviewEl = document.getElementById('quickSummaryPreview');
 const quickSummaryOpenLinkEl = document.getElementById('quickSummaryOpenLink');
+const quickSummaryHistoryBtnEl = document.getElementById('quickSummaryHistoryBtn');
 const quickNextReviewDateEl = document.getElementById('quickNextReviewDate');
 const quickPostponeDaysEl = document.getElementById('quickPostponeDays');
 const saveQuickScheduleBtnEl = document.getElementById('saveQuickScheduleBtn');
@@ -99,14 +126,27 @@ const quickLociPalaceEl = document.getElementById('quickLociPalace');
 const quickLociRoomEl = document.getElementById('quickLociRoom');
 const quickLociHookEl = document.getElementById('quickLociHook');
 const quickFlashcardsRawEl = document.getElementById('quickFlashcardsRaw');
+const quickFlashcardsEditorEl = document.getElementById('quickFlashcardsEditor');
+const quickAddFlashcardBtnEl = document.getElementById('quickAddFlashcardBtn');
 const saveQuickMemoryBtnEl = document.getElementById('saveQuickMemoryBtn');
 const quickSummaryEditorEl = document.getElementById('quickSummaryEditor');
 const saveQuickTextBtnEl = document.getElementById('saveQuickTextBtn');
 const quickFlashcardsPreviewEl = document.getElementById('quickFlashcardsPreview');
+const quickChallengeSectionEl = document.getElementById('quickChallengeSection');
+const quickChallengeMetaEl = document.getElementById('quickChallengeMeta');
+const quickChallengeProgressBarEl = document.getElementById('quickChallengeProgressBar');
+const quickChallengeProgressTextEl = document.getElementById('quickChallengeProgressText');
+const quickChallengesListEl = document.getElementById('quickChallengesList');
 const summaryParaCategoryEl = document.getElementById('summaryParaCategory');
 const summaryFolderNameEl = document.getElementById('summaryFolderName');
 const summarySavedFoldersSelectEl = document.getElementById('summarySavedFoldersSelect');
 const summaryUseSavedFolderBtnEl = document.getElementById('summaryUseSavedFolderBtn');
+const summaryChallengeCategoryEl = document.getElementById('summaryChallengeCategory');
+const summaryCodarBaseCodeBoxEl = document.getElementById('summaryCodarBaseCodeBox');
+const summaryCodarBaseCodeEl = document.getElementById('summaryCodarBaseCode');
+const summaryFlashcardsRawEl = document.getElementById('summaryFlashcardsRaw');
+const summaryFlashcardsEditorEl = document.getElementById('summaryFlashcardsEditor');
+const summaryAddFlashcardBtnEl = document.getElementById('summaryAddFlashcardBtn');
 const createBackupBtnEl = document.getElementById('createBackupBtn');
 const refreshBackupsBtnEl = document.getElementById('refreshBackupsBtn');
 const restoreBackupBtnEl = document.getElementById('restoreBackupBtn');
@@ -139,14 +179,45 @@ const studyPagesListEl = document.getElementById('studyPagesList');
 const featureSectionEls = Array.from(document.querySelectorAll('.feature-section'));
 const featureTargetEls = Array.from(document.querySelectorAll('[data-feature-target]'));
 const featureNavEl = document.getElementById('featureNav');
+const toastRegionEl = document.getElementById('toastRegion');
+const onboardingCardEl = document.getElementById('onboardingCard');
+const dismissOnboardingBtnEl = document.getElementById('dismissOnboardingBtn');
+const simpleModeToggleEl = document.getElementById('simpleModeToggle');
+const openGuideBtnEl = document.getElementById('openGuideBtn');
+const openCommandPaletteBtnEl = document.getElementById('openCommandPaletteBtn');
+const metacogOnlyRiskToggleEl = document.getElementById('metacogOnlyRiskToggle');
+const commandPaletteModalEl = document.getElementById('commandPaletteModal');
+const commandPaletteInputEl = document.getElementById('commandPaletteInput');
+const commandPaletteResultsEl = document.getElementById('commandPaletteResults');
+const closeCommandPaletteBtnEl = document.getElementById('closeCommandPaletteBtn');
+const quickGuideModalEl = document.getElementById('quickGuideModal');
+const quickGuideBodyEl = document.getElementById('quickGuideBody');
+const quickGuideNextBtnEl = document.getElementById('quickGuideNextBtn');
+const quickGuideDoneBtnEl = document.getElementById('quickGuideDoneBtn');
+const closeQuickGuideBtnEl = document.getElementById('closeQuickGuideBtn');
+const appDialogModalEl = document.getElementById('appDialogModal');
+const appDialogTitleEl = document.getElementById('appDialogTitle');
+const appDialogMessageEl = document.getElementById('appDialogMessage');
+const appDialogInputEl = document.getElementById('appDialogInput');
+const appDialogCloseBtnEl = document.getElementById('appDialogCloseBtn');
+const appDialogCancelBtnEl = document.getElementById('appDialogCancelBtn');
+const appDialogOkBtnEl = document.getElementById('appDialogOkBtn');
+const summaryHistoryModalEl = document.getElementById('summaryHistoryModal');
+const summaryHistoryTitleEl = document.getElementById('summaryHistoryTitle');
+const summaryHistoryListEl = document.getElementById('summaryHistoryList');
+const closeSummaryHistoryModalBtnEl = document.getElementById('closeSummaryHistoryModalBtn');
 let studyNotebooksRefreshTimer = null;
 let currentQuickSummary = null;
+let currentDialogResolver = null;
 
 init();
 
 async function init() {
   initFeatureNavigation();
   document.getElementById('summaryForm').addEventListener('submit', createSummary);
+  setupFlashcardEditor(summaryFlashcardsEditorEl, summaryAddFlashcardBtnEl, summaryFlashcardsRawEl);
+  setupFlashcardEditor(quickFlashcardsEditorEl, quickAddFlashcardBtnEl, quickFlashcardsRawEl);
+  setFlashcardEditorCards(summaryFlashcardsEditorEl, summaryFlashcardsRawEl, summaryFlashcardsRawEl?.value || '');
   modalEl.addEventListener('click', onModalClick);
   confidenceInputEl.addEventListener('input', () => {
     confidenceValueEl.textContent = `${confidenceInputEl.value}%`;
@@ -160,12 +231,71 @@ async function init() {
   weeklyMonthPrevBtnEl.addEventListener('click', () => loadWeeklyMonthCalendar(shiftYearMonth(state.weeklyGoal.currentMonth, -1)));
   weeklyMonthNextBtnEl.addEventListener('click', () => loadWeeklyMonthCalendar(shiftYearMonth(state.weeklyGoal.currentMonth, 1)));
   closeQuickSummaryModalBtnEl.addEventListener('click', closeQuickSummaryModal);
+  quickSummaryHistoryBtnEl?.addEventListener('click', () => {
+    if (!currentQuickSummary) return;
+    openSummaryHistory(currentQuickSummary.id, currentQuickSummary.title || 'Resumo');
+  });
   saveQuickMemoryBtnEl.addEventListener('click', saveQuickMemory);
   saveQuickTextBtnEl.addEventListener('click', saveQuickText);
   saveQuickScheduleBtnEl.addEventListener('click', saveQuickSchedule);
-  libraryParaFilterEl.addEventListener('change', refreshLibrary);
-  summaryParaCategoryEl.addEventListener('change', refreshSummarySavedFoldersSelector);
-  summaryUseSavedFolderBtnEl.addEventListener('click', applySavedSummaryFolder);
+  libraryParaFilterEl.addEventListener('change', async () => {
+    state.library.page = 1;
+    await refreshLibraryFolderSelector();
+    await refreshLibrary();
+  });
+  libraryFolderFilterEl?.addEventListener('change', async () => {
+    state.library.page = 1;
+    await refreshLibrary();
+  });
+  librarySearchInputEl?.addEventListener('input', () => {
+    state.library.search = String(librarySearchInputEl.value || '').trim().toLowerCase();
+    state.library.page = 1;
+    refreshLibrary();
+  });
+  libraryPageSizeEl?.addEventListener('change', () => {
+    const size = Number(libraryPageSizeEl.value);
+    state.library.pageSize = Number.isFinite(size) && size > 0 ? size : 20;
+    state.library.page = 1;
+    refreshLibrary();
+  });
+  libraryPrevPageBtnEl?.addEventListener('click', () => {
+    state.library.page = Math.max(1, Number(state.library.page || 1) - 1);
+    refreshLibrary();
+  });
+  libraryNextPageBtnEl?.addEventListener('click', () => {
+    state.library.page = Number(state.library.page || 1) + 1;
+    refreshLibrary();
+  });
+  reviewParaFilterEl?.addEventListener('change', async () => {
+    await refreshReviewFolderSelector();
+    renderQueue();
+  });
+  reviewFolderFilterEl?.addEventListener('change', renderQueue);
+  metacogParaFilterEl?.addEventListener('change', async () => {
+    await refreshMetacogFolderSelector();
+    await refreshMetacogCandidates();
+  });
+  metacogFolderFilterEl?.addEventListener('change', refreshMetacogCandidates);
+  metacogOnlyRiskToggleEl?.addEventListener('change', () => {
+    state.ux.onlyRiskMetacog = Boolean(metacogOnlyRiskToggleEl.checked);
+    refreshMetacogCandidates();
+  });
+  summaryParaCategoryEl?.addEventListener('change', refreshSummarySavedFoldersSelector);
+  summarySavedFoldersSelectEl?.addEventListener('change', applySavedSummaryFolder);
+  summaryUseSavedFolderBtnEl?.addEventListener('click', applySavedSummaryFolder);
+  summaryChallengeCategoryEl?.addEventListener('change', syncSummaryChallengeCategoryState);
+  simpleModeToggleEl?.addEventListener('change', () => {
+    state.ux.simpleMode = Boolean(simpleModeToggleEl.checked);
+    localStorage.setItem('smp_simple_mode', state.ux.simpleMode ? '1' : '0');
+    applySimpleMode();
+  });
+  openGuideBtnEl?.addEventListener('click', openQuickGuide);
+  openCommandPaletteBtnEl?.addEventListener('click', openCommandPalette);
+  closeCommandPaletteBtnEl?.addEventListener('click', closeCommandPalette);
+  commandPaletteInputEl?.addEventListener('input', refreshCommandPaletteResults);
+  closeQuickGuideBtnEl?.addEventListener('click', closeQuickGuide);
+  quickGuideNextBtnEl?.addEventListener('click', nextGuideStep);
+  quickGuideDoneBtnEl?.addEventListener('click', closeQuickGuide);
   createBackupBtnEl.addEventListener('click', createBackup);
   refreshBackupsBtnEl.addEventListener('click', refreshBackupsList);
   restoreBackupBtnEl.addEventListener('click', restoreSelectedBackup);
@@ -197,24 +327,61 @@ async function init() {
     summarizeStudyBtnEl.addEventListener('click', summarizeStudyNotebook);
   }
   sendStudyToMemoryBtnEl.addEventListener('click', sendStudyToMemory);
+  dismissOnboardingBtnEl?.addEventListener('click', dismissOnboarding);
+  appDialogCloseBtnEl?.addEventListener('click', () => resolveDialog(null));
+  appDialogCancelBtnEl?.addEventListener('click', () => resolveDialog(null));
+  appDialogOkBtnEl?.addEventListener('click', () => {
+    if (!appDialogInputEl || appDialogInputEl.classList.contains('hidden')) {
+      resolveDialog(true);
+      return;
+    }
+    resolveDialog(String(appDialogInputEl.value || ''));
+  });
+  closeSummaryHistoryModalBtnEl?.addEventListener('click', () => {
+    summaryHistoryModalEl?.classList.add('hidden');
+  });
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      openCommandPalette();
+      return;
+    }
+    if (event.key !== 'Escape') return;
+    if (commandPaletteModalEl && !commandPaletteModalEl.classList.contains('hidden')) {
+      closeCommandPalette();
+      return;
+    }
+    if (quickGuideModalEl && !quickGuideModalEl.classList.contains('hidden')) {
+      closeQuickGuide();
+      return;
+    }
+    if (appDialogModalEl && !appDialogModalEl.classList.contains('hidden')) {
+      resolveDialog(null);
+      return;
+    }
+    if (summaryHistoryModalEl && !summaryHistoryModalEl.classList.contains('hidden')) {
+      summaryHistoryModalEl.classList.add('hidden');
+    }
+  });
 
-  document.getElementById('browseBtn').addEventListener('click', () => {
+  const browseBtnEl = document.getElementById('browseBtn');
+  browseBtnEl?.addEventListener('click', () => {
     state.browsing.category = browserCategoryEl.value;
-    state.browsing.path = browserPathEl.value.trim();
+    state.browsing.path = browserPathEl?.value.trim() || '';
     loadParaFolder();
   });
-  browserPathEl.addEventListener('keydown', (event) => {
+  browserPathEl?.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
     state.browsing.category = browserCategoryEl.value;
-    state.browsing.path = browserPathEl.value.trim();
+    state.browsing.path = browserPathEl?.value.trim() || '';
     loadParaFolder();
   });
 
   browserCategoryEl.addEventListener('change', () => {
     state.browsing.category = browserCategoryEl.value;
     state.browsing.path = '';
-    browserPathEl.value = '';
+    if (browserPathEl) browserPathEl.value = '';
     refreshSavedFoldersSelector();
     loadParaFolder();
   });
@@ -228,6 +395,14 @@ async function init() {
     openParaDir(selected);
   });
 
+  showOnboardingIfNeeded();
+  state.ux.simpleMode = localStorage.getItem('smp_simple_mode') === '1';
+  if (simpleModeToggleEl) simpleModeToggleEl.checked = state.ux.simpleMode;
+  applySimpleMode();
+  if (localStorage.getItem('smp_guide_seen') !== '1') {
+    openQuickGuide();
+  }
+  syncSummaryChallengeCategoryState();
   await refreshAll();
   await refreshSummarySavedFoldersSelector();
   await refreshBackupsList();
@@ -237,6 +412,251 @@ async function init() {
     await refreshQueue();
     openPopupIfNeeded();
   }, 30000);
+}
+
+function showToast(message, type = 'info', durationMs = 2800) {
+  if (!toastRegionEl || !message) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = String(message);
+  toastRegionEl.appendChild(toast);
+  setTimeout(() => toast.remove(), durationMs);
+}
+
+window.alert = (message) => {
+  showToast(message, 'info');
+};
+
+function showError(message) {
+  showToast(message || 'Ocorreu um erro.', 'error', 3600);
+}
+
+function showSuccess(message) {
+  showToast(message, 'success');
+}
+
+function showActionToast(message, actionLabel, onAction, type = 'info', durationMs = 9000) {
+  if (!toastRegionEl || !message) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type} with-action`;
+  const text = document.createElement('span');
+  text.textContent = String(message);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toast-action';
+  btn.textContent = String(actionLabel || 'Acao');
+  btn.addEventListener('click', () => {
+    try {
+      if (typeof onAction === 'function') onAction();
+    } finally {
+      toast.remove();
+    }
+  });
+  toast.appendChild(text);
+  toast.appendChild(btn);
+  toastRegionEl.appendChild(toast);
+  setTimeout(() => toast.remove(), durationMs);
+}
+
+function applySimpleMode() {
+  document.body.classList.toggle('simple-mode', Boolean(state.ux.simpleMode));
+}
+
+function openQuickGuide() {
+  state.ux.guideStep = 0;
+  renderQuickGuide();
+  quickGuideModalEl?.classList.remove('hidden');
+}
+
+function closeQuickGuide() {
+  quickGuideModalEl?.classList.add('hidden');
+  localStorage.setItem('smp_guide_seen', '1');
+}
+
+function nextGuideStep() {
+  state.ux.guideStep = Math.min(state.ux.guideStep + 1, 2);
+  renderQuickGuide();
+}
+
+function renderQuickGuide() {
+  if (!quickGuideBodyEl) return;
+  const steps = [
+    {
+      title: '1) Criar resumo',
+      body: 'Abra "Novo resumo", escolha categoria/subpasta e salve com arquivo ou texto.'
+    },
+    {
+      title: '2) Revisar no tempo certo',
+      body: 'Vá para "Fila revisao", clique em "Revisar agora" e classifique com sinceridade.'
+    },
+    {
+      title: '3) Melhorar com metacognicao',
+      body: 'Em "Metacognicao", foque itens em risco e ajuste manual apenas quando necessario.'
+    }
+  ];
+  const step = steps[state.ux.guideStep] || steps[0];
+  quickGuideBodyEl.innerHTML = `
+    <article class="item">
+      <strong>${escapeHtml(step.title)}</strong>
+      <small class="muted">${escapeHtml(step.body)}</small>
+      <small class="muted">Passo ${state.ux.guideStep + 1}/${steps.length}</small>
+    </article>
+  `;
+  if (quickGuideNextBtnEl) {
+    quickGuideNextBtnEl.disabled = state.ux.guideStep >= (steps.length - 1);
+  }
+}
+
+function openCommandPalette() {
+  commandPaletteModalEl?.classList.remove('hidden');
+  if (commandPaletteInputEl) {
+    commandPaletteInputEl.value = '';
+    commandPaletteInputEl.focus();
+  }
+  refreshCommandPaletteResults();
+}
+
+function closeCommandPalette() {
+  commandPaletteModalEl?.classList.add('hidden');
+}
+
+function goFeature(feature) {
+  setFeatureView(feature, true);
+}
+
+async function refreshCommandPaletteResults() {
+  if (!commandPaletteResultsEl) return;
+  if (!Array.isArray(state.library.cache)) {
+    await refreshLibrary();
+  }
+  const query = String(commandPaletteInputEl?.value || '').trim().toLowerCase();
+  const actions = [
+    { title: 'Ir para Novo resumo', run: () => goFeature('summary') },
+    { title: 'Ir para Fila revisao', run: () => goFeature('review') },
+    { title: 'Ir para Biblioteca', run: () => goFeature('library') },
+    { title: 'Ir para Metacognicao', run: () => goFeature('metacog') },
+    { title: 'Abrir Explorador PARA', run: () => goFeature('explorer') }
+  ];
+  const summaries = (state.library.cache || []).slice(0, 120).map((item) => ({
+    title: `Resumo: ${item.title}`,
+    meta: `${formatParaLabel(item.paraCategory)} | ${getSummaryFolderPath(item) || 'Raiz'}`,
+    run: () => {
+      goFeature('library');
+      openQuickSummary(item.id);
+    }
+  }));
+  const all = [...actions, ...summaries];
+  const filtered = query
+    ? all.filter((item) => `${item.title} ${item.meta || ''}`.toLowerCase().includes(query))
+    : all.slice(0, 12);
+  if (!filtered.length) {
+    commandPaletteResultsEl.innerHTML = '<p class="muted">Nenhum resultado.</p>';
+    return;
+  }
+  commandPaletteResultsEl.innerHTML = filtered.slice(0, 20).map((item, idx) => `
+    <article class="item">
+      <div class="item-head">
+        <strong>${escapeHtml(item.title)}</strong>
+        ${item.meta ? `<small class="muted">${escapeHtml(item.meta)}</small>` : ''}
+      </div>
+      <div class="item-actions">
+        <button onclick="runCommandPaletteItem(${idx})" class="btn-secondary">Abrir</button>
+      </div>
+    </article>
+  `).join('');
+  state.ux.commandPaletteResults = filtered.slice(0, 20);
+}
+
+function runCommandPaletteItem(idx) {
+  const list = Array.isArray(state.ux.commandPaletteResults) ? state.ux.commandPaletteResults : [];
+  const item = list[Number(idx)];
+  if (!item || typeof item.run !== 'function') return;
+  item.run();
+  closeCommandPalette();
+}
+
+function showOnboardingIfNeeded() {
+  if (!onboardingCardEl) return;
+  const hidden = localStorage.getItem('smp_onboarding_hidden') === '1';
+  onboardingCardEl.classList.toggle('hidden', hidden);
+}
+
+function dismissOnboarding() {
+  localStorage.setItem('smp_onboarding_hidden', '1');
+  showOnboardingIfNeeded();
+}
+
+function invalidateLibraryCache() {
+  state.library.cache = null;
+  state.library.cacheAt = 0;
+}
+
+function resolveDialog(value) {
+  if (!currentDialogResolver) return;
+  const resolver = currentDialogResolver;
+  currentDialogResolver = null;
+  appDialogModalEl?.classList.add('hidden');
+  resolver(value);
+}
+
+function showConfirmDialog(message, title = 'Confirmacao') {
+  if (!appDialogModalEl) return Promise.resolve(false);
+  appDialogTitleEl.textContent = title;
+  appDialogMessageEl.textContent = String(message || '');
+  appDialogInputEl.classList.add('hidden');
+  appDialogInputEl.value = '';
+  appDialogOkBtnEl.textContent = 'Confirmar';
+  appDialogModalEl.classList.remove('hidden');
+  return new Promise((resolve) => {
+    currentDialogResolver = (value) => resolve(Boolean(value));
+  });
+}
+
+function showPromptDialog(message, defaultValue = '', title = 'Entrada') {
+  if (!appDialogModalEl) return Promise.resolve(null);
+  appDialogTitleEl.textContent = title;
+  appDialogMessageEl.textContent = String(message || '');
+  appDialogInputEl.classList.remove('hidden');
+  appDialogInputEl.value = String(defaultValue || '');
+  appDialogInputEl.focus();
+  appDialogOkBtnEl.textContent = 'Aplicar';
+  appDialogModalEl.classList.remove('hidden');
+  return new Promise((resolve) => {
+    currentDialogResolver = (value) => {
+      if (value === null) return resolve(null);
+      resolve(String(value || ''));
+    };
+  });
+}
+
+async function openSummaryHistory(summaryId, title) {
+  if (!summaryHistoryModalEl || !summaryHistoryListEl) return;
+  summaryHistoryTitleEl.textContent = `Historico: ${title}`;
+  summaryHistoryListEl.innerHTML = '<p class="muted">Carregando historico...</p>';
+  summaryHistoryModalEl.classList.remove('hidden');
+  const res = await fetch(`/api/summaries/${summaryId}/versions`);
+  if (!res.ok) {
+    summaryHistoryListEl.innerHTML = '<p class="muted">Falha ao carregar historico.</p>';
+    return;
+  }
+  const rows = await res.json();
+  if (!rows.length) {
+    summaryHistoryListEl.innerHTML = '<p class="muted">Sem eventos de historico.</p>';
+    return;
+  }
+  summaryHistoryListEl.innerHTML = rows.map((row) => `
+    <article class="item">
+      <div class="item-head">
+        <strong>${escapeHtml(String(row.reason || 'update'))}</strong>
+        <small>${formatDateTime(row.createdAt)}</small>
+      </div>
+      <small class="muted">Versao #${Number(row.id)} | Flashcards: ${Number(row.flashcardsCount || 0)}</small>
+    </article>
+  `).join('');
+}
+
+function openSummaryHistoryFromList(summaryId, title) {
+  openSummaryHistory(summaryId, title || 'Resumo');
 }
 
 function initFeatureNavigation() {
@@ -284,7 +704,12 @@ function setFeatureView(feature, updateHash) {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshDashboard(), refreshQueue(), refreshLibrary(), refreshAlerts(), refreshMetacogCandidates()]);
+  await Promise.all([refreshDashboard(), refreshAlerts()]);
+  await refreshReviewFolderSelector();
+  await refreshMetacogFolderSelector();
+  await Promise.all([refreshQueue(), refreshMetacogCandidates()]);
+  await refreshLibraryFolderSelector();
+  await refreshLibrary();
   await refreshSavedFoldersSelector();
   await loadParaFolder();
   openPopupIfNeeded();
@@ -333,11 +758,11 @@ async function createBackup() {
 async function restoreSelectedBackup() {
   const id = backupSelectEl.value;
   if (!id) {
-    alert('Escolha um backup na lista.');
+    showError('Escolha um backup na lista.');
     return;
   }
 
-  if (!confirm(`Restaurar backup ${id}? Isso substitui os dados atuais do banco.`)) {
+  if (!(await showConfirmDialog(`Restaurar backup ${id}? Isso substitui os dados atuais do banco.`, 'Restaurar backup'))) {
     return;
   }
 
@@ -362,14 +787,14 @@ async function refreshStudyNotebooks() {
   if (!res.ok) {
     state.study.notebooksAll = [];
     refreshStudySubjectSelector();
-    refreshStudyModuleSelector();
+    await refreshStudyModuleSelector();
     resolveCurrentStudyNotebookSelection();
     return;
   }
   const allNotebooks = await res.json();
   state.study.notebooksAll = allNotebooks;
   refreshStudySubjectSelector();
-  refreshStudyModuleSelector();
+  await refreshStudyModuleSelector();
   resolveCurrentStudyNotebookSelection();
   await loadStudyNotebookPages();
 }
@@ -380,7 +805,6 @@ async function onStudyParaCategoryChange() {
 
 function onStudyFieldsChange() {
   refreshStudySubjectSelector();
-  refreshStudyModuleSelector();
   resolveCurrentStudyNotebookSelection();
   scheduleStudyNotebooksRefresh();
 }
@@ -394,26 +818,25 @@ function scheduleStudyNotebooksRefresh() {
   }, 250);
 }
 
-function refreshStudyModuleSelector() {
+async function refreshStudyModuleSelector() {
   if (!studyModuleSelectEl) return;
-
-  const para = String(studyParaCategoryEl.value || '').trim().toLowerCase();
-  const subject = String(studySubjectEl.value || '').trim();
+  const para = String(studyParaCategoryEl.value || 'resources').trim().toLowerCase();
   const currentModule = String(studyFolderNameEl.value || '').trim();
 
-  const items = (state.study.notebooksAll || [])
-    .filter((n) => String(n.paraCategory || '').toLowerCase() === para)
-    .filter((n) => areSameStudySubject(n.subject, subject))
-    .map((n) => getStudyModuleFromNotebook(n.folderName, n.subject))
-    .filter((x) => Boolean(String(x || '').trim()));
-
-  const unique = Array.from(new Set(items)).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+  const params = new URLSearchParams({
+    category: para,
+    maxDepth: '8'
+  });
+  const res = await fetch(`/api/para/folders?${params.toString()}`);
+  const folders = res.ok ? await res.json() : { folders: [] };
+  const unique = Array.from(new Set((folders.folders || []).map((f) => String(f.relativePath || '').trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
   studyModuleSelectEl.innerHTML = '';
 
-  const emptyOpt = document.createElement('option');
-  emptyOpt.value = '';
-  emptyOpt.textContent = unique.length ? 'Selecione uma subpasta existente' : 'Nenhuma subpasta existente';
-  studyModuleSelectEl.appendChild(emptyOpt);
+  const rootOpt = document.createElement('option');
+  rootOpt.value = '';
+  rootOpt.textContent = 'Raiz da categoria';
+  studyModuleSelectEl.appendChild(rootOpt);
 
   for (const modulePath of unique) {
     const opt = document.createElement('option');
@@ -422,11 +845,12 @@ function refreshStudyModuleSelector() {
     studyModuleSelectEl.appendChild(opt);
   }
 
-  if (unique.includes(currentModule)) {
+  if (currentModule && unique.includes(currentModule)) {
     studyModuleSelectEl.value = currentModule;
   } else {
     studyModuleSelectEl.value = '';
   }
+  studyFolderNameEl.value = studyModuleSelectEl.value || '';
 }
 
 function refreshStudySubjectSelector() {
@@ -461,7 +885,6 @@ function refreshStudySubjectSelector() {
 function applySelectedStudyModule() {
   if (!studyModuleSelectEl) return;
   const selected = String(studyModuleSelectEl.value || '').trim();
-  if (!selected) return;
   studyFolderNameEl.value = selected;
   resolveCurrentStudyNotebookSelection();
 }
@@ -471,7 +894,6 @@ function applySelectedStudySubject() {
   const selected = String(studySubjectSelectEl.value || '').trim();
   if (!selected) return;
   studySubjectEl.value = selected;
-  refreshStudyModuleSelector();
   resolveCurrentStudyNotebookSelection();
 }
 
@@ -492,7 +914,7 @@ function resolveCurrentStudyNotebookSelection() {
     if (match) {
       studyAutoSelectStatusEl.textContent = `Caderno ativo: ${match.subject} (${match.paraCategory}/${String(match.folderName || '').replaceAll('\\', '/')})`;
     } else {
-      studyAutoSelectStatusEl.textContent = 'Nenhum caderno existente para essa combinacao (Materia + Subpasta).';
+      studyAutoSelectStatusEl.textContent = 'Sem caderno para a pasta selecionada.';
     }
   }
 }
@@ -552,7 +974,7 @@ async function loadStudyNotebookPages() {
     state.study.pages = [];
     studySummaryOutputEl.value = '';
     studyFlashcardsOutputEl.value = '';
-    refreshStudyModuleSelector();
+    await refreshStudyModuleSelector();
     studyPagesListEl.innerHTML = '<p class="muted">Selecione ou crie um caderno para comecar.</p>';
     setStudyPdfLink(null);
     if (studySearchResultsEl) studySearchResultsEl.innerHTML = '';
@@ -572,7 +994,7 @@ async function loadStudyNotebookPages() {
   studySubjectEl.value = data.notebook?.subject || '';
   studyParaCategoryEl.value = data.notebook?.paraCategory || 'resources';
   studyFolderNameEl.value = getStudyModuleFromNotebook(data.notebook?.folderName, data.notebook?.subject);
-  refreshStudyModuleSelector();
+  await refreshStudyModuleSelector();
   studySummaryOutputEl.value = data.notebook?.generatedSummary || '';
   studyFlashcardsOutputEl.value = data.notebook?.generatedFlashcards || '';
   setStudyPdfLink(data.notebook?.pdfUrl || null);
@@ -716,7 +1138,7 @@ async function deleteStudyPage(pageId) {
     alert('Selecione um caderno.');
     return;
   }
-  const ok = confirm('Excluir esta foto da apostila?');
+  const ok = await showConfirmDialog('Excluir esta foto da apostila?', 'Excluir foto');
   if (!ok) return;
 
   const res = await fetch(`/api/study/notebooks/${notebookId}/pages/${pageId}`, { method: 'DELETE' });
@@ -735,7 +1157,7 @@ async function clearStudyPages() {
     alert('Selecione um caderno.');
     return;
   }
-  const ok = confirm('Limpar todas as fotos deste caderno?');
+  const ok = await showConfirmDialog('Limpar todas as fotos deste caderno?', 'Limpar fotos');
   if (!ok) return;
 
   const res = await fetch(`/api/study/notebooks/${notebookId}/pages`, { method: 'DELETE' });
@@ -755,7 +1177,7 @@ async function deleteStudyNotebook() {
     alert('Selecione um caderno.');
     return;
   }
-  const ok = confirm('Excluir o caderno e a pasta _StudyScans dele?');
+  const ok = await showConfirmDialog('Excluir o caderno e a pasta _StudyScans dele?', 'Excluir caderno');
   if (!ok) return;
 
   const res = await fetch(`/api/study/notebooks/${notebookId}?removeFiles=true`, { method: 'DELETE' });
@@ -901,11 +1323,12 @@ async function sendStudyToMemory() {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.error || 'Falha ao enviar para memorizacao.');
+    showError(err.error || 'Falha ao enviar para memorizacao.');
     return;
   }
   const data = await res.json();
-  alert(`Enviado para Biblioteca. Summary ID: ${data.summaryId}. Flashcards: ${data.flashcardsCount}`);
+  invalidateLibraryCache();
+  showSuccess(`Enviado para Biblioteca. Flashcards: ${data.flashcardsCount}`);
   await refreshAll();
 }
 
@@ -916,6 +1339,7 @@ async function refreshDashboard() {
   dueTodayEl.textContent = data.dueToday;
   activeTotalEl.textContent = data.active;
   weeklyGoalStatEl.textContent = `${data.weeklyGoal.reviewedThisWeek}/${data.weeklyGoal.targetReviews}`;
+  codarXpStatEl.textContent = `${Number(data.codar?.xp || 0)} (${Number(data.codar?.streakDays || 0)}d)`;
   cognitiveLoadTextEl.textContent = `Carga cognitiva: ${data.weeklyGoal.cognitiveLoad} | alvo diario: ${data.weeklyGoal.dailyTarget}`;
   alertsCountTextEl.textContent = `Alertas de ilusao: ${data.openIllusions}`;
   paraBreakdownEl.textContent = (data.byPara || []).map((x) => `${x.paraCategory}: ${x.total}`).join(' | ') || 'Sem resumos ainda.';
@@ -946,6 +1370,7 @@ async function refreshAlerts() {
 }
 
 async function refreshMetacogCandidates() {
+  metacogCandidatesListEl.innerHTML = renderLoadingSkeleton(2);
   const res = await fetch('/api/metacog/candidates');
   if (!res.ok) {
     metacogCandidatesListEl.innerHTML = '<p class="muted">Nao foi possivel carregar itens monitorados.</p>';
@@ -953,21 +1378,33 @@ async function refreshMetacogCandidates() {
   }
 
   const items = await res.json();
-  if (!items.length) {
-    metacogCandidatesListEl.innerHTML = '<p class="muted">Sem revisoes com confianca registradas ainda.</p>';
+  const paraFilter = String(metacogParaFilterEl?.value || 'all').toLowerCase();
+  const folderFilter = String(metacogFolderFilterEl?.value || '').trim();
+  const filtered = items
+    .filter((item) => paraFilter === 'all' || String(item.paraCategory || '').toLowerCase() === paraFilter)
+    .filter((item) => {
+      if (!folderFilter) return true;
+      const folderPath = getSummaryFolderPath(item);
+      return folderPath === folderFilter || folderPath.startsWith(`${folderFilter}/`);
+    })
+    .filter((item) => !state.ux.onlyRiskMetacog || Boolean(item.riskFlag))
+    .sort((a, b) => Number(b.riskFlag || 0) - Number(a.riskFlag || 0));
+  if (!filtered.length) {
+    metacogCandidatesListEl.innerHTML = '<p class="muted">Sem resumos para este filtro.</p>';
     return;
   }
 
-  metacogCandidatesListEl.innerHTML = items.map((item) => `
+  metacogCandidatesListEl.innerHTML = filtered.map((item) => `
     <article class="item">
       <div class="item-head">
         <strong>${escapeHtml(item.title)}</strong>
-        <small class="muted">${item.riskFlag ? 'Em risco' : 'Sem risco'}${item.riskSource === 'auto' ? ' (auto)' : ' (manual)'}</small>
+        <small class="muted">${item.riskFlag ? 'Em risco' : (item.hasReview ? 'Sem risco' : 'Sem dados')}${item.riskSource === 'auto' ? ' (auto)' : ' (manual)'}</small>
       </div>
-      <small class="muted">PARA: ${escapeHtml(item.paraCategory)} | Nota: ${escapeHtml(item.grade)} | Confianca: ${Number(item.confidence)}%</small>
+      <small class="muted">PARA: ${escapeHtml(item.paraCategory)} | Nota: ${escapeHtml(item.grade || '--')} | Confianca: ${Number.isFinite(Number(item.confidence)) ? `${Number(item.confidence)}%` : '--'}</small>
       <small class="muted">Score de risco: ${Math.round(Number(item.riskScore || 0) * 100)}% | Motivo: ${escapeHtml(item.riskReason || '-')}</small>
-      <small class="muted">Ultima revisao: ${formatDateTime(item.reviewedAt)}</small>
+      <small class="muted">Ultima revisao: ${item.reviewedAt ? formatDateTime(item.reviewedAt) : 'Sem revisao ainda'}</small>
       <div class="item-actions">
+        <button onclick="openQuickSummary(${item.summaryId})" class="btn-secondary">Abrir resumo</button>
         <button onclick="setMetacogRiskMode(${item.summaryId}, 'risk')" class="btn-danger">Forcar risco</button>
         <button onclick="setMetacogRiskMode(${item.summaryId}, 'safe')" class="btn-secondary">Forcar sem risco</button>
         <button onclick="setMetacogRiskMode(${item.summaryId}, 'auto')" class="btn-secondary">Voltar auto</button>
@@ -991,28 +1428,71 @@ async function setMetacogRiskMode(summaryId, mode) {
 }
 
 async function refreshQueue() {
+  queueEl.innerHTML = renderLoadingSkeleton(2);
   const res = await fetch('/api/review-queue');
   state.queue = await res.json();
   renderQueue();
 }
 
 async function refreshLibrary() {
-  const res = await fetch('/api/summaries');
-  const data = await res.json();
-  const filter = String(libraryParaFilterEl.value || 'all').toLowerCase();
-  const filtered = filter === 'all'
+  const now = Date.now();
+  let data = state.library.cache;
+  if (!Array.isArray(data) || (now - Number(state.library.cacheAt || 0)) > state.library.cacheTtlMs) {
+    libraryEl.innerHTML = renderLoadingSkeleton(4);
+    const res = await fetch('/api/summaries');
+    if (!res.ok) {
+      libraryEl.innerHTML = '<p class="muted">Falha ao carregar biblioteca.</p>';
+      return;
+    }
+    data = await res.json();
+    state.library.cache = Array.isArray(data) ? data : [];
+    state.library.cacheAt = now;
+    data = state.library.cache;
+  }
+
+  const paraFilter = String(libraryParaFilterEl.value || 'all').toLowerCase();
+  const folderFilter = String(libraryFolderFilterEl?.value || '').trim();
+  const search = String(state.library.search || '').trim().toLowerCase();
+  const filteredByPara = paraFilter === 'all'
     ? data
-    : data.filter((item) => String(item.paraCategory || '').toLowerCase() === filter);
+    : data.filter((item) => String(item.paraCategory || '').toLowerCase() === paraFilter);
+  const filteredByFolder = folderFilter
+    ? filteredByPara.filter((item) => {
+      const folderPath = getSummaryFolderPath(item);
+      return folderPath === folderFilter || folderPath.startsWith(`${folderFilter}/`);
+    })
+    : filteredByPara;
+  const filtered = search
+    ? filteredByFolder.filter((item) => String(item.title || '').toLowerCase().includes(search))
+    : filteredByFolder;
 
   if (!filtered.length) {
-    libraryEl.innerHTML = '<p class="muted">Nenhum resumo cadastrado.</p>';
+    libraryEl.innerHTML = `
+      <article class="empty-state">
+        <strong>Nenhum resumo encontrado</strong>
+        <small class="muted">Ajuste filtros ou crie um novo resumo.</small>
+        <div class="item-actions">
+          <button onclick="goFeature('summary')">Criar novo resumo</button>
+        </div>
+      </article>
+    `;
+    if (libraryPageInfoEl) libraryPageInfoEl.textContent = 'Pagina 1 de 1';
+    if (libraryPrevPageBtnEl) libraryPrevPageBtnEl.disabled = true;
+    if (libraryNextPageBtnEl) libraryNextPageBtnEl.disabled = true;
     return;
   }
+
+  const pageSize = Math.max(1, Number(state.library.pageSize || 20));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(Math.max(1, Number(state.library.page || 1)), totalPages);
+  state.library.page = safePage;
+  const start = (safePage - 1) * pageSize;
+  const pageItems = filtered.slice(start, start + pageSize);
 
   const order = ['projects', 'areas', 'resources', 'inbox', 'archives'];
   const grouped = new Map();
   for (const key of order) grouped.set(key, []);
-  for (const item of filtered) {
+  for (const item of pageItems) {
     const key = String(item.paraCategory || '').toLowerCase();
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(item);
@@ -1032,6 +1512,9 @@ async function refreshLibrary() {
     sections.push(renderLibraryGroup(key, items));
   }
 
+  if (libraryPageInfoEl) libraryPageInfoEl.textContent = `Pagina ${safePage} de ${totalPages} (${filtered.length} itens)`;
+  if (libraryPrevPageBtnEl) libraryPrevPageBtnEl.disabled = safePage <= 1;
+  if (libraryNextPageBtnEl) libraryNextPageBtnEl.disabled = safePage >= totalPages;
   libraryEl.innerHTML = sections.join('');
 }
 
@@ -1054,24 +1537,139 @@ function renderLibraryGroup(paraKey, items) {
 function renderLibraryItem(item) {
   const fileHref = toOpenFileUrl(item.filePath);
   const primaryLabel = isTextPath(item.filePath) ? 'Abrir resumo' : 'Abrir anexo';
+  const challengeBadge = String(item.challengeCategory || 'none') === 'codar'
+    ? `<small class="muted">Desafio: Codar</small>`
+    : '';
   return `
     <article class="item">
       <div class="item-head">
         <strong>${escapeHtml(item.title)}</strong>
         <small>${item.status}</small>
       </div>
-      <small class="muted">PARA: ${item.paraCategory} | Proxima: ${formatDate(item.nextReviewAt)}</small>
+      <small class="muted">PARA: ${item.paraCategory} | Pasta: ${escapeHtml(getSummaryFolderPath(item) || 'Raiz da categoria')} | Proxima: ${formatDate(item.nextReviewAt)}</small>
+      ${renderSummaryProgress(item)}
       ${item.releaseAt ? `<small class="muted">Lancamento: ${formatDate(item.releaseAt)}</small>` : ''}
       ${(item.lociPalace || item.lociRoom || item.lociHook) ? `<small class="muted">Loci: ${escapeHtml([item.lociPalace, item.lociRoom, item.lociHook].filter(Boolean).join(' - '))}</small>` : ''}
+      ${challengeBadge}
       <div class="item-actions">
         <a href="${fileHref}" target="_blank" rel="noreferrer">${primaryLabel}</a>
+        <button onclick="openSummaryHistoryFromList(${item.id}, '${escapeJs(item.title)}')" class="btn-secondary">Historico</button>
         <button onclick="openQuickSummary(${item.id})" class="btn-secondary">Resumo rapido</button>
+        <button onclick="goFeature('review')" class="btn-secondary">Ir para revisao</button>
         <button onclick="postponeSummary(${item.id})" class="btn-secondary">Postergar</button>
         <button onclick="deleteSummary(${item.id})" class="btn-danger">Excluir</button>
         ${item.status === 'active' ? `<button onclick="archiveSummary(${item.id})" class="btn-danger">Arquivar</button>` : ''}
       </div>
     </article>
   `;
+}
+
+async function refreshLibraryFolderSelector() {
+  if (!libraryParaFilterEl || !libraryFolderFilterEl) return;
+  const para = String(libraryParaFilterEl.value || 'all').toLowerCase();
+  if (para === 'all') {
+    libraryFolderFilterEl.innerHTML = '<option value="">Selecione uma categoria PARA</option>';
+    libraryFolderFilterEl.disabled = true;
+    return;
+  }
+
+  const params = new URLSearchParams({
+    category: para,
+    maxDepth: '8'
+  });
+  const res = await fetch(`/api/para/folders?${params.toString()}`);
+  if (!res.ok) {
+    libraryFolderFilterEl.innerHTML = '<option value="">Raiz da categoria</option>';
+    libraryFolderFilterEl.disabled = false;
+    return;
+  }
+
+  const data = await res.json();
+  const previous = String(libraryFolderFilterEl.value || '');
+  libraryFolderFilterEl.innerHTML = '';
+  libraryFolderFilterEl.disabled = false;
+
+  const rootOpt = document.createElement('option');
+  rootOpt.value = '';
+  rootOpt.textContent = 'Raiz da categoria';
+  libraryFolderFilterEl.appendChild(rootOpt);
+
+  for (const folder of data.folders || []) {
+    const opt = document.createElement('option');
+    opt.value = folder.relativePath;
+    opt.textContent = folder.relativePath;
+    libraryFolderFilterEl.appendChild(opt);
+  }
+
+  const hasPrev = Array.from(libraryFolderFilterEl.options).some((opt) => opt.value === previous);
+  libraryFolderFilterEl.value = hasPrev ? previous : '';
+}
+
+async function refreshFolderSelectorByCategory(category, selectEl, disabledLabel = 'Selecione uma categoria PARA') {
+  if (!selectEl) return;
+  const para = String(category || 'all').toLowerCase();
+  if (para === 'all') {
+    selectEl.innerHTML = `<option value="">${disabledLabel}</option>`;
+    selectEl.disabled = true;
+    return;
+  }
+  const previous = String(selectEl.value || '');
+  const params = new URLSearchParams({
+    category: para,
+    maxDepth: '8'
+  });
+  const res = await fetch(`/api/para/folders?${params.toString()}`);
+  selectEl.innerHTML = '';
+  selectEl.disabled = false;
+
+  const rootOpt = document.createElement('option');
+  rootOpt.value = '';
+  rootOpt.textContent = 'Raiz da categoria';
+  selectEl.appendChild(rootOpt);
+
+  if (res.ok) {
+    const data = await res.json();
+    for (const folder of data.folders || []) {
+      const opt = document.createElement('option');
+      opt.value = folder.relativePath;
+      opt.textContent = folder.relativePath;
+      selectEl.appendChild(opt);
+    }
+  }
+
+  const hasPrev = Array.from(selectEl.options).some((opt) => opt.value === previous);
+  selectEl.value = hasPrev ? previous : '';
+}
+
+async function refreshReviewFolderSelector() {
+  await refreshFolderSelectorByCategory(reviewParaFilterEl?.value || 'all', reviewFolderFilterEl);
+}
+
+async function refreshMetacogFolderSelector() {
+  await refreshFolderSelectorByCategory(metacogParaFilterEl?.value || 'all', metacogFolderFilterEl);
+}
+
+function getSummaryFolderPath(item) {
+  const paraKey = String(item?.paraCategory || '').toLowerCase();
+  const paraRoot = String(PARA_FOLDER_MAP[paraKey] || '').toLowerCase();
+  if (!paraRoot) return '';
+
+  const pathCandidates = [item?.notePath, item?.filePath];
+  for (const raw of pathCandidates) {
+    const full = String(raw || '').trim();
+    if (!full) continue;
+    const normalized = full.replaceAll('\\', '/');
+    const lower = normalized.toLowerCase();
+    const marker = `/knowledgeosvault/${paraRoot}/`;
+    const idx = lower.indexOf(marker);
+    if (idx < 0) continue;
+    const relative = normalized.slice(idx + marker.length).replace(/^\/+/, '');
+    if (!relative) return '';
+    const parts = relative.split('/').filter(Boolean);
+    if (parts.length <= 1) return '';
+    return parts.slice(0, -1).join('/');
+  }
+  return '';
 }
 
 function formatParaLabel(value) {
@@ -1082,6 +1680,33 @@ function formatParaLabel(value) {
   if (key === 'inbox') return 'Inbox';
   if (key === 'archives') return 'Archives';
   return value || 'Outros';
+}
+
+function renderLoadingSkeleton(count = 3) {
+  return Array.from({ length: Math.max(1, count) }).map(() => `
+    <article class="skeleton-card">
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+      <div class="skeleton skeleton-row"></div>
+    </article>
+  `).join('');
+}
+
+function renderSummaryProgress(item) {
+  const step = Math.max(0, Number(item?.currentStep || 0));
+  const pct = Math.round((Math.min(step, 3) / 3) * 100);
+  const chips = [
+    { label: 'Criado', done: true },
+    { label: '1a revisao', done: step >= 1 },
+    { label: 'Consolidando', done: step >= 2 },
+    { label: 'Consolidado', done: step >= 3 }
+  ];
+  return `
+    <div class="progress-strip"><span style="width:${pct}%"></span></div>
+    <div class="status-chips">
+      ${chips.map((chip) => `<span class="status-chip ${chip.done ? 'done' : ''}">${chip.label}</span>`).join('')}
+    </div>
+  `;
 }
 
 async function openWeeklyGoalDetails() {
@@ -1205,14 +1830,16 @@ async function openQuickSummary(id) {
 
   const data = await res.json();
   currentQuickSummary = data;
+  state.challengeFeedback = {};
   quickSummaryTitleEl.textContent = data.title || 'Resumo rapido';
-  quickSummaryMetaEl.textContent = `PARA: ${data.paraCategory} | Proxima: ${formatDate(data.nextReviewAt)} | Lancamento: ${formatDate(data.releaseAt || data.createdAt)} | Status: ${data.status}`;
+  const challengeLabel = String(data.challengeCategory || 'none') === 'codar' ? ' | Desafio: Codar' : '';
+  quickSummaryMetaEl.textContent = `PARA: ${data.paraCategory} | Proxima: ${formatDate(data.nextReviewAt)} | Lancamento: ${formatDate(data.releaseAt || data.createdAt)} | Status: ${data.status}${challengeLabel}`;
   quickNextReviewDateEl.value = toDateInput(data.nextReviewAt);
   quickPostponeDaysEl.value = '';
   quickLociPalaceEl.value = data.lociPalace || '';
   quickLociRoomEl.value = data.lociRoom || '';
   quickLociHookEl.value = data.lociHook || '';
-  quickFlashcardsRawEl.value = (data.flashcards || []).map((c) => `${c.prompt}::${c.answer}`).join('\n');
+  setFlashcardEditorCards(quickFlashcardsEditorEl, quickFlashcardsRawEl, data.flashcards || []);
 
   quickSummaryCardsEl.textContent = `Flashcards: ${data.flashcardsCount}`;
   renderQuickFlashcardsPreview(data.flashcards || []);
@@ -1224,13 +1851,149 @@ async function openQuickSummary(id) {
   const preferredOpenPath = data.notePath || data.filePath;
   quickSummaryOpenLinkEl.href = toOpenFileUrl(preferredOpenPath);
   quickSummaryOpenLinkEl.textContent = isTextPath(preferredOpenPath) ? 'Abrir resumo' : 'Abrir anexo';
+  await loadQuickChallenges(data.id, data.challengeCategory);
 
   quickSummaryModalEl.classList.remove('hidden');
 }
 
 function closeQuickSummaryModal() {
   quickSummaryModalEl.classList.add('hidden');
+  quickChallengeSectionEl.classList.add('hidden');
+  quickChallengesListEl.innerHTML = '';
+  quickChallengeProgressBarEl.style.width = '0%';
+  quickChallengeProgressTextEl.textContent = 'Progresso: 0/0';
+  state.challengeFeedback = {};
   currentQuickSummary = null;
+}
+
+function getComplexityOptionLabel(option) {
+  const raw = String(option || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (raw === 'o(1)') return 'Quase nao muda com mais dados';
+  if (raw === 'o(logn)' || raw === 'o(log(n))') return 'Aumenta um pouco';
+  if (raw === 'o(n)') return 'Aumenta na mesma proporcao';
+  if (raw === 'o(n²)' || raw === 'o(n^2)' || raw === 'o(n2)' || raw === 'o(n*n)') return 'Aumenta muito';
+  return String(option || '').trim();
+}
+
+function getChallengePromptText(challenge) {
+  if (challenge?.kind !== 'complexity') {
+    return String(challenge?.prompt || '');
+  }
+  return 'Quando a quantidade de dados aumenta, qual comportamento de velocidade faz mais sentido?';
+}
+
+function getChallengeOptionViews(challenge) {
+  const options = Array.isArray(challenge?.options) ? challenge.options : [];
+  if (challenge?.kind !== 'complexity') {
+    return options.map((opt) => ({ value: String(opt), label: String(opt) }));
+  }
+  return options.map((opt) => ({
+    value: String(opt),
+    label: getComplexityOptionLabel(opt)
+  }));
+}
+
+async function loadQuickChallenges(summaryId, challengeCategory) {
+  const isCodar = String(challengeCategory || 'none') === 'codar';
+  if (!isCodar) {
+    quickChallengeSectionEl.classList.add('hidden');
+    quickChallengesListEl.innerHTML = '';
+    quickChallengeProgressBarEl.style.width = '0%';
+    quickChallengeProgressTextEl.textContent = 'Progresso: 0/0';
+    return;
+  }
+
+  quickChallengeSectionEl.classList.remove('hidden');
+  quickChallengeMetaEl.textContent = 'Carregando desafios...';
+  const res = await fetch(`/api/summaries/${summaryId}/challenges`);
+  if (!res.ok) {
+    quickChallengeMetaEl.textContent = 'Falha ao carregar desafios.';
+    quickChallengesListEl.innerHTML = '';
+    return;
+  }
+
+  const data = await res.json();
+  quickChallengeMetaEl.textContent = `XP: ${Number(data.gamification?.xp || 0)} | Sequencia: ${Number(data.gamification?.streakDays || 0)} dia(s)`;
+  const challenges = Array.isArray(data.challenges) ? data.challenges : [];
+  const solvedCount = challenges.filter((c) => c.solved).length;
+  const progressPct = challenges.length ? Math.round((solvedCount / challenges.length) * 100) : 0;
+  quickChallengeProgressBarEl.style.width = `${progressPct}%`;
+  quickChallengeProgressTextEl.textContent = `Progresso: ${solvedCount}/${challenges.length}`;
+  if (!challenges.length) {
+    quickChallengesListEl.innerHTML = '<p class="muted">Sem desafios gerados para este resumo.</p>';
+    return;
+  }
+
+  quickChallengesListEl.innerHTML = challenges.map((c) => {
+    const optionViews = getChallengeOptionViews(c);
+    const optionsHtml = optionViews.length
+      ? `<div class="challenge-options">${optionViews.map((opt) => `<button type="button" onclick="submitQuickChallenge(${c.id}, '${escapeJs(opt.value)}')">${escapeHtml(opt.label)}</button>`).join('')}</div>`
+      : '';
+    const answerInputHtml = optionViews.length
+      ? ''
+      : `
+        <div class="item-actions challenge-answer-row">
+          <input id="quickChallengeAnswer_${c.id}" placeholder="Digite sua resposta" />
+          <button type="button" onclick="submitQuickChallenge(${c.id})">Enviar</button>
+        </div>
+      `;
+    const status = c.solved ? 'Concluido' : 'Pendente';
+    const challengeTitle = String(c.title || '');
+    const feedback = state.challengeFeedback[String(c.id)] || null;
+    const feedbackHtml = feedback
+      ? `<div class="challenge-feedback ${feedback.ok ? 'ok' : 'fail'}">${escapeHtml(feedback.message)}</div>`
+      : '';
+    return `
+      <article class="item">
+        <div class="item-head">
+          <strong>${escapeHtml(challengeTitle)}</strong>
+          <small class="muted challenge-meta">${status} | ${Number(c.bestScore || 0)} pts</small>
+        </div>
+        <p class="challenge-prompt">${escapeHtml(getChallengePromptText(c))}</p>
+        ${optionsHtml}
+        ${answerInputHtml}
+        ${feedbackHtml}
+      </article>
+    `;
+  }).join('');
+}
+
+async function submitQuickChallenge(challengeId, quickAnswer) {
+  if (!currentQuickSummary) return;
+  const input = document.getElementById(`quickChallengeAnswer_${challengeId}`);
+  const answer = String(quickAnswer || input?.value || '').trim();
+  if (!answer) {
+    alert('Digite uma resposta.');
+    return;
+  }
+  if (input && quickAnswer) input.value = answer;
+
+  const res = await fetch(`/api/challenges/${challengeId}/attempt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    state.challengeFeedback[String(challengeId)] = {
+      ok: false,
+      message: err.error || 'Falha ao enviar resposta.'
+    };
+    await loadQuickChallenges(currentQuickSummary.id, currentQuickSummary.challengeCategory);
+    return;
+  }
+
+  const data = await res.json();
+  const expectedLabel = getComplexityOptionLabel(data.expectedAnswer || '');
+  const message = data.isCorrect
+    ? `Acertou! Score: ${data.score}. ${data.feedback || ''}`.trim()
+    : `Quase la. Score: ${data.score}. ${data.feedback || ''}${data.expectedAnswer ? ` Gabarito: ${expectedLabel}` : ''}`.trim();
+  state.challengeFeedback[String(challengeId)] = {
+    ok: Boolean(data.isCorrect),
+    message
+  };
+  await loadQuickChallenges(currentQuickSummary.id, currentQuickSummary.challengeCategory);
+  await refreshDashboard();
 }
 
 function renderQuickFlashcardsPreview(cards) {
@@ -1248,6 +2011,8 @@ function renderQuickFlashcardsPreview(cards) {
 
 async function saveQuickMemory() {
   if (!currentQuickSummary) return;
+  syncFlashcardEditorRaw(quickFlashcardsEditorEl, quickFlashcardsRawEl);
+  const flashcards = getFlashcardEditorCards(quickFlashcardsEditorEl);
   const res = await fetch(`/api/summaries/${currentQuickSummary.id}/memory`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -1255,14 +2020,17 @@ async function saveQuickMemory() {
       lociPalace: quickLociPalaceEl.value,
       lociRoom: quickLociRoomEl.value,
       lociHook: quickLociHookEl.value,
+      flashcards,
       flashcardsRaw: quickFlashcardsRawEl.value
     })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.error || 'Falha ao salvar Loci/Flashcards.');
+    showError(err.error || 'Falha ao salvar Loci/Flashcards.');
     return;
   }
+  invalidateLibraryCache();
+  showSuccess('Loci e flashcards salvos.');
   await openQuickSummary(currentQuickSummary.id);
   await refreshAll();
 }
@@ -1278,9 +2046,10 @@ async function saveQuickText() {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.error || 'Falha ao salvar texto do resumo.');
+    showError(err.error || 'Falha ao salvar texto do resumo.');
     return;
   }
+  showSuccess('Texto do resumo salvo.');
   await openQuickSummary(currentQuickSummary.id);
   await refreshAll();
 }
@@ -1308,16 +2077,17 @@ async function saveQuickSchedule() {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.error || 'Falha ao salvar agenda.');
+    showError(err.error || 'Falha ao salvar agenda.');
     return;
   }
 
+  showSuccess('Agenda atualizada.');
   await openQuickSummary(currentQuickSummary.id);
   await refreshAll();
 }
 
 async function postponeSummary(id) {
-  const raw = prompt('Postergar este resumo em quantos dias?', '1');
+  const raw = await showPromptDialog('Postergar este resumo em quantos dias?', '1', 'Postergar resumo');
   if (raw === null) return;
 
   const days = Number(raw);
@@ -1334,25 +2104,48 @@ async function postponeSummary(id) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.error || 'Falha ao postergar.');
+    showError(err.error || 'Falha ao postergar.');
     return;
   }
 
+  invalidateLibraryCache();
+  showSuccess('Resumo postergado com sucesso.');
   await refreshAll();
 }
 
 function renderQueue() {
-  if (!state.queue.length) {
-    queueEl.innerHTML = '<p class="muted">Sem revisoes pendentes hoje.</p>';
+  const paraFilter = String(reviewParaFilterEl?.value || 'all').toLowerCase();
+  const folderFilter = String(reviewFolderFilterEl?.value || '').trim();
+  const filtered = (state.queue || [])
+    .filter((item) => paraFilter === 'all' || String(item.paraCategory || '').toLowerCase() === paraFilter)
+    .filter((item) => {
+      if (!folderFilter) return true;
+      const folderPath = getSummaryFolderPath(item);
+      return folderPath === folderFilter || folderPath.startsWith(`${folderFilter}/`);
+    });
+
+  if (!filtered.length) {
+    queueEl.innerHTML = `
+      <article class="empty-state">
+        <strong>Nada pendente hoje</strong>
+        <small class="muted">Você pode adiantar estudos pela Biblioteca.</small>
+        <div class="item-actions">
+          <button onclick="goFeature('library')" class="btn-secondary">Abrir biblioteca</button>
+        </div>
+      </article>
+    `;
     return;
   }
 
-  queueEl.innerHTML = state.queue.map((item) => `
+  queueEl.innerHTML = filtered.map((item) => `
     <article class="item">
       <strong>${escapeHtml(item.title)}</strong>
       <small class="muted">PARA: ${item.paraCategory} | Etapa: ${item.currentStep + 1}/4 | Venceu em ${formatDate(item.nextReviewAt)}</small>
+      ${renderSummaryProgress(item)}
       <div class="item-actions">
         <button onclick="openManualPopup(${item.id})">Revisar agora</button>
+        <button onclick="openQuickSummary(${item.id})" class="btn-secondary">Abrir resumo</button>
+        <button onclick="archiveSummary(${item.id})" class="btn-danger">Arquivar</button>
       </div>
     </article>
   `).join('');
@@ -1360,7 +2153,15 @@ function renderQueue() {
 
 function openPopupIfNeeded() {
   if (state.popupItem) return;
-  const due = state.queue[0];
+  const paraFilter = String(reviewParaFilterEl?.value || 'all').toLowerCase();
+  const folderFilter = String(reviewFolderFilterEl?.value || '').trim();
+  const due = (state.queue || []).find((item) => {
+    const paraOk = paraFilter === 'all' || String(item.paraCategory || '').toLowerCase() === paraFilter;
+    if (!paraOk) return false;
+    if (!folderFilter) return true;
+    const folderPath = getSummaryFolderPath(item);
+    return folderPath === folderFilter || folderPath.startsWith(`${folderFilter}/`);
+  });
   if (!due) return;
   showPopup(due);
 }
@@ -1407,12 +2208,98 @@ function revealCompareStep() {
   setReviewStep(2);
 }
 
+function parseFlashcardsRaw(raw) {
+  const lines = String(raw || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const cards = [];
+  for (const line of lines) {
+    const separators = ['::', '=>', '->', ':'];
+    for (const sep of separators) {
+      const idx = line.indexOf(sep);
+      if (idx <= 0) continue;
+      const prompt = line.slice(0, idx).trim();
+      const answer = line.slice(idx + sep.length).trim();
+      if (!prompt || !answer) continue;
+      cards.push({ prompt, answer });
+      break;
+    }
+  }
+  return cards;
+}
+
+function createFlashcardRowElement(prompt = '', answer = '') {
+  const row = document.createElement('div');
+  row.className = 'flashcard-row';
+  row.innerHTML = `
+    <input type="text" data-field="prompt" placeholder="Pergunta" maxlength="500" value="${escapeHtml(prompt)}" />
+    <input type="text" data-field="answer" placeholder="Resposta" maxlength="1000" value="${escapeHtml(answer)}" />
+    <button type="button" class="btn-danger" data-remove-card="1">Remover</button>
+  `;
+  return row;
+}
+
+function getFlashcardEditorCards(editorEl) {
+  if (!editorEl) return [];
+  const rows = Array.from(editorEl.querySelectorAll('.flashcard-row'));
+  return rows.map((row) => ({
+    prompt: String(row.querySelector('[data-field="prompt"]')?.value || '').trim(),
+    answer: String(row.querySelector('[data-field="answer"]')?.value || '').trim()
+  })).filter((card) => card.prompt && card.answer).slice(0, 50);
+}
+
+function syncFlashcardEditorRaw(editorEl, rawEl) {
+  if (!rawEl) return;
+  const cards = getFlashcardEditorCards(editorEl);
+  rawEl.value = cards.map((card) => `${card.prompt}::${card.answer}`).join('\n');
+}
+
+function setFlashcardEditorCards(editorEl, rawEl, cards) {
+  if (!editorEl) return;
+  const sourceCards = Array.isArray(cards) ? cards : parseFlashcardsRaw(cards);
+  const normalized = sourceCards
+    .map((card) => ({
+      prompt: String(card?.prompt || '').trim(),
+      answer: String(card?.answer || '').trim()
+    }))
+    .filter((card) => card.prompt || card.answer);
+
+  editorEl.innerHTML = '';
+  const rows = normalized.length ? normalized : [{ prompt: '', answer: '' }];
+  rows.forEach((card) => editorEl.appendChild(createFlashcardRowElement(card.prompt, card.answer)));
+  syncFlashcardEditorRaw(editorEl, rawEl);
+}
+
+function setupFlashcardEditor(editorEl, addBtnEl, rawEl) {
+  if (!editorEl || !addBtnEl) return;
+
+  addBtnEl.addEventListener('click', () => {
+    editorEl.appendChild(createFlashcardRowElement('', ''));
+    syncFlashcardEditorRaw(editorEl, rawEl);
+  });
+
+  editorEl.addEventListener('click', (event) => {
+    const btn = event.target.closest('button[data-remove-card]');
+    if (!btn) return;
+    const row = btn.closest('.flashcard-row');
+    if (!row) return;
+    row.remove();
+    if (!editorEl.querySelector('.flashcard-row')) {
+      editorEl.appendChild(createFlashcardRowElement('', ''));
+    }
+    syncFlashcardEditorRaw(editorEl, rawEl);
+  });
+
+  editorEl.addEventListener('input', () => syncFlashcardEditorRaw(editorEl, rawEl));
+}
+
 async function createSummary(event) {
   event.preventDefault();
 
+  syncFlashcardEditorRaw(summaryFlashcardsEditorEl, summaryFlashcardsRawEl);
   const formData = new FormData(event.target);
   const title = String(formData.get('title') || '').trim();
   const summaryText = String(formData.get('summaryText') || '').trim();
+  const challengeCategory = String(formData.get('challengeCategory') || 'none').trim().toLowerCase();
+  const codarBaseCode = String(formData.get('codarBaseCode') || '').trim();
   const file = formData.get('summaryFile');
 
   if (!title) {
@@ -1425,32 +2312,61 @@ async function createSummary(event) {
     return;
   }
 
+  if (challengeCategory === 'codar' && !codarBaseCode) {
+    alert('Para desafio Codar, informe o codigo base.');
+    summaryCodarBaseCodeEl?.focus();
+    return;
+  }
+
   const res = await fetch('/api/summaries', { method: 'POST', body: formData });
   if (!res.ok) {
     const err = await res.json();
-    alert(err.error || 'Falha ao criar resumo.');
+    showError(err.error || 'Falha ao criar resumo.');
     return;
   }
   const created = await res.json();
   if (Number.isFinite(created.flashcardsCount)) {
-    alert(`Resumo salvo. Flashcards reconhecidos: ${created.flashcardsCount}.`);
+    const paraLabel = formatParaLabel(formData.get('paraCategory') || 'resources');
+    const folderPath = String(formData.get('folderName') || '').trim() || 'Raiz da categoria';
+    const challengeLabel = challengeCategory === 'codar' ? ' | Desafio: Codar' : '';
+    showSuccess(`Resumo salvo em ${paraLabel}/${folderPath}. Flashcards: ${created.flashcardsCount}${challengeLabel}.`);
   }
 
   event.target.reset();
+  invalidateLibraryCache();
+  setFlashcardEditorCards(summaryFlashcardsEditorEl, summaryFlashcardsRawEl, []);
+  syncSummaryChallengeCategoryState();
   await refreshSummarySavedFoldersSelector();
   await refreshAll();
 }
 
+function syncSummaryChallengeCategoryState() {
+  const category = String(summaryChallengeCategoryEl?.value || 'none').trim().toLowerCase();
+  const isCodar = category === 'codar';
+  summaryCodarBaseCodeBoxEl?.classList.toggle('hidden', !isCodar);
+  if (summaryCodarBaseCodeEl) {
+    summaryCodarBaseCodeEl.required = isCodar;
+    if (!isCodar) {
+      summaryCodarBaseCodeEl.value = '';
+    }
+  }
+}
+
 async function refreshSummarySavedFoldersSelector() {
+  if (!summaryParaCategoryEl || !summarySavedFoldersSelectEl || !summaryFolderNameEl) {
+    return;
+  }
+
   const category = summaryParaCategoryEl.value || 'resources';
   const params = new URLSearchParams({
     category,
-    maxDepth: '8'
+    maxDepth: '1'
   });
 
   const res = await fetch(`/api/para/folders?${params.toString()}`);
   if (!res.ok) {
-    summarySavedFoldersSelectEl.innerHTML = '<option value="">(nenhuma subpasta)</option>';
+    summarySavedFoldersSelectEl.innerHTML = '<option value="">Raiz da categoria</option>';
+    summaryFolderNameEl.value = '';
     return;
   }
 
@@ -1459,7 +2375,7 @@ async function refreshSummarySavedFoldersSelector() {
 
   const emptyOpt = document.createElement('option');
   emptyOpt.value = '';
-  emptyOpt.textContent = '(nenhuma subpasta)';
+  emptyOpt.textContent = 'Raiz da categoria';
   summarySavedFoldersSelectEl.appendChild(emptyOpt);
 
   for (const folder of data.folders || []) {
@@ -1473,10 +2389,17 @@ async function refreshSummarySavedFoldersSelector() {
   const hasCurrent = Array.from(summarySavedFoldersSelectEl.options).some((opt) => opt.value === current);
   if (hasCurrent) {
     summarySavedFoldersSelectEl.value = current;
+  } else {
+    summarySavedFoldersSelectEl.value = '';
+    summaryFolderNameEl.value = '';
   }
+  applySavedSummaryFolder();
 }
 
 function applySavedSummaryFolder() {
+  if (!summarySavedFoldersSelectEl || !summaryFolderNameEl) {
+    return;
+  }
   const selected = summarySavedFoldersSelectEl.value || '';
   summaryFolderNameEl.value = selected;
 }
@@ -1563,29 +2486,81 @@ function nextFlashcard() {
 async function archiveSummary(id) {
   const res = await fetch(`/api/summaries/${id}/archive`, { method: 'POST' });
   if (!res.ok) {
-    alert('Falha ao arquivar.');
+    showError('Falha ao arquivar.');
     return;
   }
+  invalidateLibraryCache();
+  showSuccess('Resumo arquivado.');
   await refreshAll();
 }
 
 async function deleteSummary(id) {
-  const confirmed = confirm('Deseja excluir este resumo da Biblioteca?');
+  if (state.ux.pendingDeletes[id]) {
+    clearTimeout(state.ux.pendingDeletes[id].timer);
+    delete state.ux.pendingDeletes[id];
+  }
+  const confirmed = await showConfirmDialog('Deseja excluir este resumo da Biblioteca?', 'Excluir resumo');
   if (!confirmed) return;
 
-  const removeFile = confirm('Tambem deseja excluir o arquivo fisico da pasta PARA?\\nOK = sim, Cancelar = manter arquivo.');
+  const removeFile = await showConfirmDialog('Tambem deseja excluir o arquivo fisico da pasta PARA?', 'Excluir arquivo fisico');
+  const summary = (state.library.cache || []).find((item) => Number(item.id) === Number(id))
+    || (state.queue || []).find((item) => Number(item.id) === Number(id))
+    || null;
+  const summaryTitle = summary?.title || `Resumo #${id}`;
 
-  const res = await fetch(`/api/summaries/${id}?removeFile=${removeFile ? 'true' : 'false'}`, {
+  state.ux.pendingDeletes[id] = {
+    removeFile: Boolean(removeFile),
+    title: summaryTitle,
+    timer: setTimeout(() => {
+      commitPendingDelete(id);
+    }, 9000)
+  };
+
+  if (Array.isArray(state.library.cache)) {
+    state.library.cache = state.library.cache.filter((item) => Number(item.id) !== Number(id));
+    state.library.cacheAt = Date.now();
+  }
+  state.queue = (state.queue || []).filter((item) => Number(item.id) !== Number(id));
+  renderQueue();
+  refreshLibrary();
+
+  showActionToast(
+    `Exclusao agendada para "${summaryTitle}".`,
+    'Desfazer',
+    () => undoPendingDelete(id),
+    'info',
+    9000
+  );
+}
+
+async function commitPendingDelete(id) {
+  const pending = state.ux.pendingDeletes[id];
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  delete state.ux.pendingDeletes[id];
+
+  const res = await fetch(`/api/summaries/${id}?removeFile=${pending.removeFile ? 'true' : 'false'}`, {
     method: 'DELETE'
   });
-
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    alert(err.error || 'Falha ao excluir resumo.');
+    showError(err.error || 'Falha ao excluir resumo.');
+    await refreshAll();
     return;
   }
-
+  invalidateLibraryCache();
+  showSuccess(`Resumo excluido: ${pending.title}.`);
   await refreshAll();
+}
+
+function undoPendingDelete(id) {
+  const pending = state.ux.pendingDeletes[id];
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  delete state.ux.pendingDeletes[id];
+  showSuccess(`Exclusao cancelada: ${pending.title}.`);
+  invalidateLibraryCache();
+  refreshAll();
 }
 
 function openManualPopup(id) {
@@ -1605,7 +2580,7 @@ async function loadParaFolder() {
   state.browsing.category = data.category;
   state.browsing.path = data.currentPath || '';
   browserCategoryEl.value = data.category;
-  browserPathEl.value = data.currentPath || '';
+  if (browserPathEl) browserPathEl.value = data.currentPath || '';
   syncSavedFolderSelect(data.currentPath || '');
 
   const lines = [];
@@ -1770,7 +2745,7 @@ async function uploadToCurrentFolder() {
 }
 
 async function deleteFile(relativePath) {
-  if (!confirm(`Excluir arquivo ${relativePath}?`)) return;
+  if (!(await showConfirmDialog(`Excluir arquivo ${relativePath}?`, 'Excluir arquivo'))) return;
 
   const res = await fetch('/api/para/file', {
     method: 'DELETE',
@@ -1794,7 +2769,7 @@ async function deleteFile(relativePath) {
 }
 
 async function deleteFolder(folderPath) {
-  if (!confirm(`Excluir pasta vazia ${folderPath}?`)) return;
+  if (!(await showConfirmDialog(`Excluir pasta vazia ${folderPath}?`, 'Excluir pasta'))) return;
 
   const res = await fetch('/api/para/folder', {
     method: 'DELETE',
@@ -1821,7 +2796,7 @@ async function deleteCurrentFolder() {
   const folderPath = state.browsing.path;
   await deleteFolder(folderPath);
   state.browsing.path = getParentPath(folderPath);
-  browserPathEl.value = state.browsing.path;
+  if (browserPathEl) browserPathEl.value = state.browsing.path;
   await loadParaFolder();
   await refreshSavedFoldersSelector();
   await refreshSummarySavedFoldersSelector();
@@ -1829,7 +2804,7 @@ async function deleteCurrentFolder() {
 
 function openParaDir(relativePath) {
   state.browsing.path = relativePath;
-  browserPathEl.value = relativePath;
+  if (browserPathEl) browserPathEl.value = relativePath;
   loadParaFolder();
 }
 
@@ -1934,6 +2909,10 @@ window.openWeeklyDayDetails = openWeeklyDayDetails;
 window.postponeSummary = postponeSummary;
 window.deleteStudyPage = deleteStudyPage;
 window.setMetacogRiskMode = setMetacogRiskMode;
+window.submitQuickChallenge = submitQuickChallenge;
+window.openSummaryHistoryFromList = openSummaryHistoryFromList;
+window.goFeature = goFeature;
+window.runCommandPaletteItem = runCommandPaletteItem;
 
 async function resolveAlert(id) {
   const res = await fetch(`/api/metacog/alerts/${id}/resolve`, { method: 'POST' });

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "test": "node tests/server-utils.test.js",
     "setup:folders": "node scripts/setupFolders.js",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

@@ -32,8 +32,26 @@ const OCR_SUPPORTED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 ensureDirs();
 const db = new Database(DB_PATH);
 initDb();
+ensureDemoCodarSummary();
+regenerateLegacyCodarChallenges();
 
 app.use(express.json());
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  res.setHeader('X-Request-Id', requestId);
+  res.on('finish', () => {
+    if (!String(req.path || '').startsWith('/api/')) return;
+    logEvent('api.request', {
+      requestId,
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      durationMs: Date.now() - startedAt
+    });
+  });
+  next();
+});
 app.use(express.static(PUBLIC_DIR));
 app.use('/vault', express.static(VAULT_DIR, {
   etag: false,
@@ -193,6 +211,7 @@ app.post('/api/backup/create', (req, res) => {
     fs.writeFileSync(path.join(dir, 'export.json'), JSON.stringify(exportData, null, 2), 'utf8');
     fs.copyFileSync(DB_PATH, path.join(dir, 'app.db'));
 
+    logEvent('backup.created', { backupId });
     res.status(201).json({ ok: true, id: backupId });
   } catch (err) {
     console.error(err);
@@ -217,6 +236,7 @@ app.post('/api/backup/restore', (req, res) => {
     const payload = JSON.parse(raw);
     restoreLogicalExport(payload);
 
+    logEvent('backup.restored', { backupId: id });
     res.json({ ok: true, id });
   } catch (err) {
     console.error(err);
@@ -285,7 +305,8 @@ app.get('/api/dashboard', (req, res) => {
     WHERE resolved_at IS NULL
   `).get().total;
 
-  res.json({ dueToday, active, byPara, weeklyGoal, openIllusions });
+  const codar = computeCodarGamification();
+  res.json({ dueToday, active, byPara, weeklyGoal, openIllusions, codar });
 });
 
 app.get('/api/weekly-goal', (req, res) => {
@@ -434,6 +455,9 @@ app.get('/api/metacog/candidates', (req, res) => {
       s.id AS summaryId,
       s.title,
       s.para_category AS paraCategory,
+      s.file_path AS filePath,
+      s.note_path AS notePath,
+      s.created_at AS createdAt,
       r.reviewed_at AS reviewedAt,
       r.grade,
       r.confidence,
@@ -443,22 +467,24 @@ app.get('/api/metacog/candidates', (req, res) => {
         WHEN mo.risk_override IS 0 THEN 'manual_safe'
         ELSE 'auto'
       END AS riskSource
-    FROM reviews r
-    JOIN summaries s ON s.id = r.summary_id
-    LEFT JOIN metacog_risk_overrides mo ON mo.summary_id = s.id
-    JOIN (
+    FROM summaries s
+    LEFT JOIN (
       SELECT summary_id, MAX(reviewed_at) AS lastReviewedAt
       FROM reviews
-      WHERE confidence IS NOT NULL
       GROUP BY summary_id
-    ) lr ON lr.summary_id = r.summary_id AND lr.lastReviewedAt = r.reviewed_at
+    ) lr ON lr.summary_id = s.id
+    LEFT JOIN reviews r ON r.summary_id = s.id AND r.reviewed_at = lr.lastReviewedAt
+    LEFT JOIN metacog_risk_overrides mo ON mo.summary_id = s.id
     WHERE s.status = 'active'
-    ORDER BY r.reviewed_at DESC
-    LIMIT 20
+    ORDER BY COALESCE(r.reviewed_at, s.created_at) DESC
+    LIMIT 200
   `).all();
 
   const shaped = rows.map((row) => {
-    const auto = evaluateMetacogRisk(row.grade, row.confidence);
+    const hasReview = Boolean(row.reviewedAt);
+    const auto = hasReview
+      ? evaluateMetacogRisk(row.grade, row.confidence)
+      : { riskFlag: false, riskScore: 0, reason: 'Sem revisao registrada ainda.' };
     const manual = Number.isFinite(Number(row.riskOverride)) ? Number(row.riskOverride) : null;
     const riskFlag = manual === 1 ? 1 : manual === 0 ? 0 : (auto.riskFlag ? 1 : 0);
     const riskReason = manual === 1
@@ -469,6 +495,7 @@ app.get('/api/metacog/candidates', (req, res) => {
     const riskScore = manual === 1 ? 1 : manual === 0 ? 0 : auto.riskScore;
     return {
       ...row,
+      hasReview,
       riskFlag,
       riskScore,
       riskReason
@@ -530,7 +557,7 @@ app.post('/api/metacog/alerts/:id/resolve', (req, res) => {
 app.get('/api/review-queue', (req, res) => {
   const today = startOfDayISO(new Date());
   const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, note_path AS notePath, current_step AS currentStep, next_review_at AS nextReviewAt,
+    SELECT id, title, para_category AS paraCategory, challenge_category AS challengeCategory, file_path AS filePath, note_path AS notePath, current_step AS currentStep, next_review_at AS nextReviewAt,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     WHERE status = 'active' AND next_review_at <= ?
@@ -541,13 +568,39 @@ app.get('/api/review-queue', (req, res) => {
 });
 
 app.get('/api/summaries', (req, res) => {
-  const rows = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, note_path AS notePath, created_at AS createdAt, release_at AS releaseAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
-           loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
-    FROM summaries
-    ORDER BY created_at DESC
-  `).all();
-  res.json(rows);
+  try {
+    const category = String(req.query.category || '').trim().toLowerCase();
+    const search = String(req.query.search || '').trim();
+    const pageSize = ensureSafePageSize(req.query.pageSize, 200, 500);
+    const page = ensureSafePage(req.query.page, 1);
+    const offset = (page - 1) * pageSize;
+
+    const where = [];
+    const params = [];
+    if (PARA_MAP[category]) {
+      where.push('para_category = ?');
+      params.push(category);
+    }
+    if (search) {
+      where.push('LOWER(title) LIKE ?');
+      params.push(`%${search.toLowerCase()}%`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const rows = db.prepare(`
+      SELECT id, title, para_category AS paraCategory, challenge_category AS challengeCategory, file_path AS filePath, note_path AS notePath, created_at AS createdAt, release_at AS releaseAt, current_step AS currentStep, next_review_at AS nextReviewAt, status,
+             loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
+      FROM summaries
+      ${whereSql}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, pageSize, offset);
+
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao carregar resumos.' });
+  }
 });
 
 app.get('/api/summaries/:id/flashcards', (req, res) => {
@@ -564,7 +617,7 @@ app.get('/api/summaries/:id/flashcards', (req, res) => {
 app.get('/api/summaries/:id/quick', (req, res) => {
   const id = Number(req.params.id);
   const summary = db.prepare(`
-    SELECT id, title, para_category AS paraCategory, file_path AS filePath, note_path AS notePath, created_at AS createdAt, release_at AS releaseAt, next_review_at AS nextReviewAt, status,
+    SELECT id, title, para_category AS paraCategory, challenge_category AS challengeCategory, file_path AS filePath, note_path AS notePath, created_at AS createdAt, release_at AS releaseAt, next_review_at AS nextReviewAt, status,
            loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook
     FROM summaries
     WHERE id = ?
@@ -644,6 +697,142 @@ app.get('/api/summaries/:id/quick', (req, res) => {
   });
 });
 
+app.get('/api/summaries/:id/versions', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const exists = db.prepare('SELECT id FROM summaries WHERE id = ?').get(id);
+    if (!exists) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+    const rows = db.prepare(`
+      SELECT id, reason, created_at AS createdAt, snapshot_json AS snapshotJson
+      FROM summary_versions
+      WHERE summary_id = ?
+      ORDER BY id DESC
+      LIMIT 100
+    `).all(id);
+    const mapped = rows.map((row) => {
+      let flashcardsCount = 0;
+      try {
+        const parsed = JSON.parse(String(row.snapshotJson || '{}'));
+        flashcardsCount = Array.isArray(parsed.flashcards) ? parsed.flashcards.length : 0;
+      } catch (err) {
+        flashcardsCount = 0;
+      }
+      return {
+        id: row.id,
+        reason: row.reason,
+        createdAt: row.createdAt,
+        flashcardsCount
+      };
+    });
+    res.json(mapped);
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao carregar historico do resumo.' });
+  }
+});
+
+app.get('/api/summaries/:id/challenges', (req, res) => {
+  try {
+    const summaryId = Number(req.params.id);
+    const summary = db.prepare(`
+      SELECT id, title, challenge_category AS challengeCategory, file_path AS filePath, note_path AS notePath, codar_base_code AS codarBaseCode
+      FROM summaries
+      WHERE id = ?
+    `).get(summaryId);
+    if (!summary) {
+      return res.status(404).json({ error: 'Resumo nao encontrado.' });
+    }
+    if (String(summary.challengeCategory || 'none') !== 'codar') {
+      return res.json({ challengeCategory: 'none', challenges: [], gamification: computeCodarGamification() });
+    }
+
+    ensureCodarChallenges(summary);
+    const rows = db.prepare(`
+      SELECT
+        c.id,
+        c.kind,
+        c.title,
+        c.prompt,
+        c.expected_answer AS expectedAnswer,
+        c.options_json AS optionsJson,
+        c.order_index AS orderIndex,
+        COALESCE(MAX(a.score), 0) AS bestScore,
+        COALESCE(MAX(a.is_correct), 0) AS solved,
+        MAX(a.created_at) AS lastAttemptAt,
+        COUNT(a.id) AS attemptsCount
+      FROM summary_challenges c
+      LEFT JOIN challenge_attempts a ON a.challenge_id = c.id
+      WHERE c.summary_id = ?
+      GROUP BY c.id
+      ORDER BY c.order_index ASC, c.id ASC
+    `).all(summaryId);
+
+    const challenges = rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      title: row.title,
+      prompt: row.prompt,
+      expectedAnswer: row.expectedAnswer,
+      options: safeParseJsonArray(row.optionsJson),
+      bestScore: Number(row.bestScore || 0),
+      solved: Number(row.solved || 0) === 1,
+      lastAttemptAt: row.lastAttemptAt || null,
+      attemptsCount: Number(row.attemptsCount || 0)
+    }));
+
+    res.json({
+      challengeCategory: 'codar',
+      challenges,
+      gamification: computeCodarGamification()
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao carregar desafios.' });
+  }
+});
+
+app.post('/api/challenges/:id/attempt', (req, res) => {
+  try {
+    const challengeId = Number(req.params.id);
+    const challenge = db.prepare(`
+      SELECT c.id, c.summary_id AS summaryId, c.kind, c.prompt, c.expected_answer AS expectedAnswer
+      FROM summary_challenges c
+      JOIN summaries s ON s.id = c.summary_id
+      WHERE c.id = ? AND s.challenge_category = 'codar'
+    `).get(challengeId);
+    if (!challenge) {
+      return res.status(404).json({ error: 'Desafio nao encontrado.' });
+    }
+
+    const answer = String(req.body.answer || '').trim();
+    if (!answer) {
+      return res.status(400).json({ error: 'Resposta obrigatoria.' });
+    }
+
+    const result = evaluateChallengeAnswer(challenge, answer);
+    db.prepare(`
+      INSERT INTO challenge_attempts (challenge_id, summary_id, user_answer, is_correct, score, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(challenge.id, challenge.summaryId, answer, result.isCorrect ? 1 : 0, result.score, new Date().toISOString());
+
+    res.json({
+      ok: true,
+      challengeId: challenge.id,
+      summaryId: challenge.summaryId,
+      score: result.score,
+      isCorrect: result.isCorrect,
+      feedback: result.feedback,
+      expectedAnswer: challenge.expectedAnswer,
+      gamification: computeCodarGamification()
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: 'Falha ao registrar tentativa.' });
+  }
+});
+
 app.put('/api/summaries/:id/memory', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -656,7 +845,8 @@ app.put('/api/summaries/:id/memory', (req, res) => {
     const lociRoom = String(req.body.lociRoom || '').trim().slice(0, 160);
     const lociHook = String(req.body.lociHook || '').trim().slice(0, 500);
     const flashcardsRaw = req.body.flashcardsRaw;
-    const cards = parseFlashcards(flashcardsRaw);
+    const cards = parseFlashcards(flashcardsRaw, req.body.flashcards);
+    recordSummaryVersion(id, 'memory_update');
 
     const tx = db.transaction(() => {
       db.prepare(`
@@ -677,6 +867,7 @@ app.put('/api/summaries/:id/memory', (req, res) => {
     });
     tx();
 
+    logEvent('summary.memory.updated', { summaryId: id, flashcardsCount: cards.length });
     res.json({ ok: true, flashcardsCount: cards.length });
   } catch (err) {
     console.error(err);
@@ -706,7 +897,12 @@ app.put('/api/summaries/:id/text', (req, res) => {
     }
 
     const content = String(req.body.content || '');
+    if (content.length > 200000) {
+      return res.status(400).json({ error: 'Texto do resumo excede o limite.' });
+    }
+    recordSummaryVersion(id, 'text_update');
     fs.writeFileSync(filePath, content, 'utf8');
+    logEvent('summary.text.updated', { summaryId: id, filePath });
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -852,11 +1048,7 @@ app.post('/api/para/folder', (req, res) => {
     const para = normalizePara(req.body.category || 'resources');
     const baseDir = path.join(VAULT_DIR, PARA_MAP[para]);
     const currentPath = String(req.body.currentPath || '');
-    const folderName = sanitizeFileName(req.body.folderName || '');
-
-    if (!folderName) {
-      return res.status(400).json({ error: 'Nome da pasta obrigatorio.' });
-    }
+    const folderName = sanitizeFileName(validateRequiredText(req.body.folderName, 'Nome da pasta', 1, 120));
 
     const parentDir = resolveInsideBase(baseDir, currentPath);
     const targetDir = path.join(parentDir, folderName);
@@ -866,6 +1058,7 @@ app.post('/api/para/folder', (req, res) => {
     }
 
     fs.mkdirSync(targetDir, { recursive: true });
+    logEvent('para.folder.created', { category: para, currentPath, folderName });
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -903,6 +1096,7 @@ app.put('/api/para/file', (req, res) => {
     }
 
     fs.writeFileSync(absolutePath, content, 'utf8');
+    logEvent('para.file.saved', { category: para, filePath });
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -922,6 +1116,7 @@ app.delete('/api/para/file', (req, res) => {
     }
 
     fs.unlinkSync(absolutePath);
+    logEvent('para.file.deleted', { category: para, filePath });
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -950,6 +1145,7 @@ app.delete('/api/para/folder', (req, res) => {
     }
 
     fs.rmdirSync(absolutePath);
+    logEvent('para.folder.deleted', { category: para, folderPath });
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -970,13 +1166,9 @@ app.get('/api/study/notebooks', (req, res) => {
 
 app.post('/api/study/notebooks', (req, res) => {
   try {
-    const subjectInput = String(req.body.subject || '').trim().slice(0, 120);
+    const subjectInput = validateRequiredText(req.body.subject, 'Materia', 1, 120);
     const para = normalizePara(req.body.paraCategory || 'resources');
     const folderNameInput = String(req.body.folderName || '').trim();
-    if (!subjectInput) {
-      return res.status(400).json({ error: 'Materia obrigatoria.' });
-    }
-
     const normalized = normalizeStudySubject(subjectInput);
     const subject = normalized.subject;
     const effectiveModule = folderNameInput || normalized.inferredModule;
@@ -989,6 +1181,7 @@ app.post('/api/study/notebooks', (req, res) => {
     `).get(para, folderName);
 
     if (existing) {
+      logEvent('study.notebook.reused', { notebookId: existing.id, paraCategory: para, folderName });
       return res.json({ id: existing.id, reused: true, subject, folderName, paraCategory: para });
     }
 
@@ -998,6 +1191,7 @@ app.post('/api/study/notebooks', (req, res) => {
       VALUES (?, ?, ?, ?, ?)
     `).run(subject, para, folderName, now, now);
 
+    logEvent('study.notebook.created', { notebookId: Number(result.lastInsertRowid), paraCategory: para, folderName });
     res.status(201).json({
       id: Number(result.lastInsertRowid),
       reused: false,
@@ -1456,7 +1650,7 @@ app.post('/api/study/notebooks/:id/send-to-memory', (req, res) => {
     );
     const summaryId = Number(result.lastInsertRowid);
 
-    const cards = parseFlashcards(finalFlashcards || '');
+    const cards = parseFlashcards(finalFlashcards || '', req.body.flashcards);
     const insertCard = db.prepare(`
       INSERT INTO flashcards (summary_id, prompt, answer, created_at)
       VALUES (?, ?, ?, ?)
@@ -1471,6 +1665,8 @@ app.post('/api/study/notebooks/:id/send-to-memory', (req, res) => {
       WHERE id = ?
     `).run(summaryId, finalSummary, finalFlashcards || null, now.toISOString(), notebookId);
 
+    recordSummaryVersion(summaryId, 'created_from_study');
+    logEvent('study.sent_to_memory', { notebookId, summaryId, flashcardsCount: cards.length });
     res.json({ ok: true, summaryId, flashcardsCount: cards.length });
   } catch (err) {
     console.error(err);
@@ -1480,9 +1676,11 @@ app.post('/api/study/notebooks/:id/send-to-memory', (req, res) => {
 
 app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
   try {
-    const title = (req.body.title || '').trim();
+    const title = validateRequiredText(req.body.title, 'Titulo', 1, 120);
     const para = normalizePara(req.body.paraCategory || 'resources');
-    const folderName = (req.body.folderName || '').trim();
+    const challengeCategory = normalizeChallengeCategory(req.body.challengeCategory || 'none');
+    const codarBaseCode = String(req.body.codarBaseCode || '').trim().slice(0, 120000);
+    const folderName = String(req.body.folderName || '').trim().slice(0, 240);
     const fileNameInput = (req.body.fileName || '').trim();
     const summaryText = (req.body.summaryText || '').trim();
     const lociPalace = String(req.body.lociPalace || '').trim().slice(0, 160);
@@ -1491,8 +1689,8 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     const flashcardsRaw = req.body.flashcardsRaw;
     const launchDateRaw = String(req.body.launchDate || '').trim();
 
-    if (!title) {
-      return res.status(400).json({ error: 'Titulo obrigatorio.' });
+    if (challengeCategory === 'codar' && !codarBaseCode) {
+      return res.status(400).json({ error: 'Para desafio Codar, informe o codigo base.' });
     }
 
     let filePath = null;
@@ -1532,11 +1730,13 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     const nextReview = addDays(baseForSchedule, REVIEW_INTERVALS[0]);
 
     const result = db.prepare(`
-      INSERT INTO summaries (title, para_category, file_path, note_path, created_at, release_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      INSERT INTO summaries (title, para_category, challenge_category, codar_base_code, file_path, note_path, created_at, release_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
     `).run(
       title,
       para,
+      challengeCategory,
+      codarBaseCode || null,
       filePath,
       notePath,
       created.toISOString(),
@@ -1549,7 +1749,7 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
     );
 
     const summaryId = Number(result.lastInsertRowid);
-    const flashcards = parseFlashcards(flashcardsRaw);
+    const flashcards = parseFlashcards(flashcardsRaw, req.body.flashcards);
     const insertCard = db.prepare(`
       INSERT INTO flashcards (summary_id, prompt, answer, created_at)
       VALUES (?, ?, ?, ?)
@@ -1559,6 +1759,13 @@ app.post('/api/summaries', upload.single('summaryFile'), (req, res) => {
       insertCard.run(summaryId, card.prompt, card.answer, created.toISOString());
     }
 
+    recordSummaryVersion(summaryId, 'created');
+    logEvent('summary.created', {
+      summaryId,
+      paraCategory: para,
+      challengeCategory,
+      flashcardsCount: flashcards.length
+    });
     res.status(201).json({ id: result.lastInsertRowid, flashcardsCount: flashcards.length });
   } catch (err) {
     console.error(err);
@@ -1666,6 +1873,7 @@ app.post('/api/summaries/:id/archive', (req, res) => {
     WHERE id = ?
   `).run(target, noteTarget, id);
 
+  logEvent('summary.archived', { summaryId: id, archivedPath: target });
   res.json({ ok: true });
 });
 
@@ -1680,6 +1888,9 @@ app.delete('/api/summaries/:id', (req, res) => {
     const removeFile = String(req.query.removeFile || '').toLowerCase() === 'true';
 
     const tx = db.transaction(() => {
+      db.prepare('DELETE FROM challenge_attempts WHERE summary_id = ?').run(id);
+      db.prepare('DELETE FROM summary_challenges WHERE summary_id = ?').run(id);
+      db.prepare('DELETE FROM summary_versions WHERE summary_id = ?').run(id);
       db.prepare('DELETE FROM flashcards WHERE summary_id = ?').run(id);
       db.prepare('DELETE FROM metacog_alerts WHERE summary_id = ?').run(id);
       db.prepare('DELETE FROM reviews WHERE summary_id = ?').run(id);
@@ -1698,6 +1909,7 @@ app.delete('/api/summaries/:id', (req, res) => {
       }
     }
 
+    logEvent('summary.deleted', { summaryId: id, removedFile: removeFile });
     res.json({ ok: true, removedFile: removeFile });
   } catch (err) {
     console.error(err);
@@ -1705,9 +1917,20 @@ app.delete('/api/summaries/:id', (req, res) => {
   }
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`SuperMemo PARA app rodando em http://${HOST}:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, HOST, () => {
+    console.log(`SuperMemo PARA app rodando em http://${HOST}:${PORT}`);
+  });
+}
+
+module.exports = {
+  app,
+  validateRequiredText,
+  ensureSafePageSize,
+  ensureSafePage,
+  sanitizeFolderPath,
+  parseFlashcards
+};
 
 function ensureDirs() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -2139,6 +2362,8 @@ function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       para_category TEXT NOT NULL,
+      challenge_category TEXT NOT NULL DEFAULT 'none',
+      codar_base_code TEXT,
       file_path TEXT NOT NULL,
       note_path TEXT,
       created_at TEXT NOT NULL,
@@ -2217,6 +2442,40 @@ function initDb() {
       updated_at TEXT NOT NULL,
       FOREIGN KEY(notebook_id) REFERENCES study_notebooks(id)
     );
+
+    CREATE TABLE IF NOT EXISTS summary_challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      summary_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      expected_answer TEXT NOT NULL,
+      options_json TEXT,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(summary_id) REFERENCES summaries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS challenge_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      challenge_id INTEGER NOT NULL,
+      summary_id INTEGER NOT NULL,
+      user_answer TEXT NOT NULL,
+      is_correct INTEGER NOT NULL DEFAULT 0,
+      score INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(challenge_id) REFERENCES summary_challenges(id),
+      FOREIGN KEY(summary_id) REFERENCES summaries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS summary_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      summary_id INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(summary_id) REFERENCES summaries(id)
+    );
   `);
 
   ensureColumn('reviews', 'confidence', 'INTEGER');
@@ -2229,6 +2488,8 @@ function initDb() {
   ensureColumn('summaries', 'loci_hook', 'TEXT');
   ensureColumn('summaries', 'release_at', 'TEXT');
   ensureColumn('summaries', 'note_path', 'TEXT');
+  ensureColumn('summaries', 'challenge_category', "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn('summaries', 'codar_base_code', 'TEXT');
   ensureColumn('metacog_risk_overrides', 'risk_override', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('metacog_risk_overrides', 'updated_at', 'TEXT');
   ensureColumn('study_notebooks', 'generated_pdf_path', 'TEXT');
@@ -2241,6 +2502,79 @@ function initDb() {
 function normalizePara(value) {
   const normalized = String(value).trim().toLowerCase();
   return PARA_MAP[normalized] ? normalized : 'resources';
+}
+
+function normalizeChallengeCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'codar') return 'codar';
+  return 'none';
+}
+
+function validateRequiredText(value, label, min = 1, max = 500) {
+  const text = String(value || '').trim();
+  if (text.length < min) {
+    throw new Error(`${label} obrigatorio.`);
+  }
+  if (text.length > max) {
+    throw new Error(`${label} excede ${max} caracteres.`);
+  }
+  return text;
+}
+
+function ensureSafePageSize(raw, fallback = 50, max = 200) {
+  const pageSize = Number(raw);
+  if (!Number.isFinite(pageSize) || pageSize <= 0) return fallback;
+  return Math.min(Math.floor(pageSize), max);
+}
+
+function ensureSafePage(raw, fallback = 1) {
+  const page = Number(raw);
+  if (!Number.isFinite(page) || page <= 0) return fallback;
+  return Math.floor(page);
+}
+
+function logEvent(event, meta = {}) {
+  const payload = {
+    at: new Date().toISOString(),
+    event: String(event || 'app.event'),
+    ...meta
+  };
+  try {
+    console.log(JSON.stringify(payload));
+  } catch (err) {
+    console.log(`[${payload.at}] ${payload.event}`);
+  }
+}
+
+function recordSummaryVersion(summaryId, reason, extras = {}) {
+  const id = Number(summaryId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const summary = db.prepare(`
+    SELECT id, title, para_category AS paraCategory, challenge_category AS challengeCategory, codar_base_code AS codarBaseCode, file_path AS filePath, note_path AS notePath,
+           loci_palace AS lociPalace, loci_room AS lociRoom, loci_hook AS lociHook, status, next_review_at AS nextReviewAt
+    FROM summaries
+    WHERE id = ?
+  `).get(id);
+  if (!summary) return;
+  const flashcards = db.prepare(`
+    SELECT prompt, answer
+    FROM flashcards
+    WHERE summary_id = ?
+    ORDER BY id ASC
+  `).all(id);
+  db.prepare(`
+    INSERT INTO summary_versions (summary_id, reason, snapshot_json, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    id,
+    String(reason || 'update'),
+    JSON.stringify({
+      summary,
+      flashcards,
+      ...extras
+    }),
+    new Date().toISOString()
+  );
 }
 
 function sanitizeFileName(value) {
@@ -2268,7 +2602,143 @@ function buildSummaryTemplate(title, body) {
   return `# ${title}\n\n## Contexto\n${body}\n\n## 5 bullets-chave\n- \n- \n- \n- \n- \n\n## Exemplo pratico\n- \n\n## 3 perguntas de recall\n1. \n2. \n3. \n\n## Proxima acao\n- `;
 }
 
-function parseFlashcards(raw) {
+function ensureDemoCodarSummary() {
+  try {
+    const existing = db.prepare(`
+      SELECT id, file_path AS filePath, note_path AS notePath
+      FROM summaries
+      WHERE title = 'TesteCodar'
+      ORDER BY id DESC
+      LIMIT 1
+    `).get();
+
+    const challengeCategory = 'codar';
+    const codeSnippet = `public static int Busca(int[] vetor, int inicio, int fim, int valor) {
+\tif(inicio > fim) return -1;
+\tint meio = (inicio+fim)/2;
+\tif(vetor[meio] == valor) return meio;
+\tif(valor < vetor[meio]) return Busca(vetor, inicio, (meio -1), valor);
+\treturn Busca(vetor, (meio +1),fim,  valor);
+}`;
+
+    const now = new Date();
+    const nextReview = addDays(now, REVIEW_INTERVALS[0]);
+
+    if (!existing) {
+      const { target } = resolveParaTargetFolder('resources', 'Codar');
+      const fileName = createUniqueFileName(target, 'TesteCodar.md');
+      const filePath = path.join(target, fileName);
+      const content = buildSummaryTemplate('TesteCodar', `Busca binaria recursiva em Java.\nComplexidade esperada: O(log n).\n\n\`\`\`java\n${codeSnippet}\n\`\`\``);
+      fs.writeFileSync(filePath, content, 'utf8');
+
+      const result = db.prepare(`
+        INSERT INTO summaries (
+          title, para_category, challenge_category, codar_base_code, file_path, note_path, created_at, release_at, current_step, next_review_at, status, loci_palace, loci_room, loci_hook
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+      `).run(
+        'TesteCodar',
+        'resources',
+        challengeCategory,
+        codeSnippet,
+        filePath,
+        null,
+        now.toISOString(),
+        startOfDayISO(now),
+        0,
+        startOfDayISO(nextReview),
+        'Minha casa',
+        'Escritorio',
+        'Busca recursiva em gavetas'
+      );
+
+      const summaryId = Number(result.lastInsertRowid);
+      const insertCard = db.prepare(`
+        INSERT INTO flashcards (summary_id, prompt, answer, created_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      const createdAt = now.toISOString();
+      insertCard.run(summaryId, 'Qual a complexidade da busca binaria?', 'O(log n)', createdAt);
+      insertCard.run(summaryId, 'Qual condicao encerra sem encontrar?', 'inicio > fim retorna -1', createdAt);
+      insertCard.run(summaryId, 'Qual valor e comparado no passo central?', 'vetor[meio]', createdAt);
+      return {
+        summaryId,
+        title: 'TesteCodar',
+        challengeCategory,
+        filePath,
+        created: true,
+        challengesReset: true
+      };
+    }
+
+    db.prepare(`
+      UPDATE summaries
+      SET challenge_category = ?
+      WHERE id = ?
+    `).run(challengeCategory, existing.id);
+    db.prepare(`
+      UPDATE summaries
+      SET codar_base_code = ?
+      WHERE id = ?
+    `).run(codeSnippet, existing.id);
+
+    const notePath = normalizeSummaryNotePath(existing.id, existing.notePath);
+    const mainPath = normalizeSummaryFilePath(existing.id, existing.filePath);
+    const pathToWrite = notePath || (mainPath && isTextFilePath(mainPath) ? mainPath : ensureSummaryNotePath(existing.id, existing.filePath, existing.notePath));
+    if (pathToWrite) {
+      const content = buildSummaryTemplate('TesteCodar', `Busca binaria recursiva em Java.\nComplexidade esperada: O(log n).\n\n\`\`\`java\n${codeSnippet}\n\`\`\``);
+      fs.writeFileSync(pathToWrite, content, 'utf8');
+    }
+
+    const cardsCount = db.prepare('SELECT COUNT(*) AS total FROM flashcards WHERE summary_id = ?').get(existing.id).total;
+    if (Number(cardsCount) === 0) {
+      const insertCard = db.prepare(`
+        INSERT INTO flashcards (summary_id, prompt, answer, created_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      const createdAt = now.toISOString();
+      insertCard.run(existing.id, 'Qual a complexidade da busca binaria?', 'O(log n)', createdAt);
+      insertCard.run(existing.id, 'Qual condicao encerra sem encontrar?', 'inicio > fim retorna -1', createdAt);
+      insertCard.run(existing.id, 'Qual valor e comparado no passo central?', 'vetor[meio]', createdAt);
+    }
+
+    const challengeIds = db.prepare('SELECT id FROM summary_challenges WHERE summary_id = ?').all(existing.id).map((r) => r.id);
+    if (challengeIds.length) {
+      const placeholders = challengeIds.map(() => '?').join(', ');
+      db.prepare(`DELETE FROM challenge_attempts WHERE challenge_id IN (${placeholders})`).run(...challengeIds);
+    }
+    db.prepare('DELETE FROM summary_challenges WHERE summary_id = ?').run(existing.id);
+    return {
+      summaryId: existing.id,
+      title: 'TesteCodar',
+      challengeCategory,
+      filePath: pathToWrite || mainPath || null,
+      created: false,
+      challengesReset: true
+    };
+  } catch (err) {
+    console.error('Falha ao preparar resumo de teste Codar:', err);
+    return null;
+  }
+}
+
+function parseFlashcards(raw, structuredCards) {
+  const fromStructured = Array.isArray(structuredCards)
+    ? structuredCards
+        .map((item) => ({
+          prompt: String(item?.prompt || '').trim(),
+          answer: String(item?.answer || '').trim()
+        }))
+        .filter((card) => card.prompt && card.answer)
+        .map((card) => ({
+          prompt: card.prompt.slice(0, 500),
+          answer: card.answer.slice(0, 1000)
+        }))
+        .slice(0, 50)
+    : [];
+  if (fromStructured.length) {
+    return fromStructured;
+  }
+
   const source = Array.isArray(raw) ? raw.join('\n') : String(raw || '');
   const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const cards = [];
@@ -2325,7 +2795,7 @@ function sanitizeFolderPath(value) {
   const parts = raw
     .split(/[\\/]+/)
     .map((part) => sanitizeFileName(part))
-    .filter(Boolean);
+    .filter((part) => Boolean(part) && part !== '.' && part !== '..');
 
   return parts.join(path.sep);
 }
@@ -2454,6 +2924,313 @@ function ensureSummaryNotePath(summaryId, rawFilePath, rawNotePath) {
 
   db.prepare('UPDATE summaries SET note_path = ? WHERE id = ?').run(notePath, summaryId);
   return notePath;
+}
+
+function safeParseJsonArray(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed) ? parsed.map((v) => String(v || '').trim()).filter(Boolean) : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function tokenizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 3);
+}
+
+function parseBigONotation(text) {
+  const match = String(text || '').toLowerCase().match(/o\([^)]+\)/);
+  if (!match) return null;
+  return match[0].replace(/\s+/g, '');
+}
+
+function detectComplexityFromText(text) {
+  const found = parseBigONotation(text);
+  if (found) return found;
+  return 'O(n)';
+}
+
+function mapComplexityToHumanOption(value) {
+  const normalized = String(value || '').toLowerCase().replace(/\s+/g, '');
+  if (normalized === 'o(1)') return 'Quase nao muda com mais dados';
+  if (normalized === 'o(logn)' || normalized === 'o(log(n))') return 'Aumenta um pouco';
+  if (normalized === 'o(n)') return 'Aumenta na mesma proporcao';
+  return 'Aumenta muito';
+}
+
+function scoreByOverlap(expected, answer) {
+  const expectedTokens = Array.from(new Set(tokenizeText(expected))).slice(0, 20);
+  const answerTokens = new Set(tokenizeText(answer));
+  if (!expectedTokens.length || !answerTokens.size) {
+    return 0;
+  }
+  const hit = expectedTokens.filter((t) => answerTokens.has(t)).length;
+  const ratio = hit / expectedTokens.length;
+  return Math.round(clamp(ratio, 0, 1) * 100);
+}
+
+function evaluateChallengeAnswer(challenge, answerRaw) {
+  const answer = String(answerRaw || '').trim();
+  const expected = String(challenge.expectedAnswer || '').trim();
+  const normalizedAnswer = answer.toLowerCase().replace(/\s+/g, '');
+  const normalizedExpected = expected.toLowerCase().replace(/\s+/g, '');
+
+  if (!answer) {
+    return { score: 0, isCorrect: false, feedback: 'Resposta vazia.' };
+  }
+
+  if (challenge.kind === 'mcq' || challenge.kind === 'complexity') {
+    const exact = normalizedAnswer === normalizedExpected;
+    const score = exact ? 100 : (normalizedExpected && normalizedAnswer.includes(normalizedExpected) ? 70 : 0);
+    return {
+      score,
+      isCorrect: exact,
+      feedback: exact ? 'Resposta correta.' : `Dica: revise o conceito-chave (${expected}).`
+    };
+  }
+
+  if (challenge.kind === 'line_fill') {
+    const exact = normalizedAnswer === normalizedExpected;
+    const near = !exact && normalizedExpected && normalizedExpected.includes(normalizedAnswer);
+    const score = exact ? 100 : (near ? 60 : 0);
+    return {
+      score,
+      isCorrect: exact,
+      feedback: exact ? 'Perfeito, linha completada corretamente.' : 'Compare sua resposta com o trecho original e tente novamente.'
+    };
+  }
+
+  const score = scoreByOverlap(expected, answer);
+  const isCorrect = score >= 55;
+  return {
+    score,
+    isCorrect,
+    feedback: isCorrect ? 'Boa resposta, voce cobriu os pontos principais.' : 'Inclua os elementos essenciais do codigo base na resposta.'
+  };
+}
+
+function computeCodarGamification() {
+  const challengeRows = db.prepare(`
+    SELECT c.id
+    FROM summary_challenges c
+    JOIN summaries s ON s.id = c.summary_id
+    WHERE s.challenge_category = 'codar'
+  `).all();
+  const totalChallenges = challengeRows.length;
+
+  const bestRows = db.prepare(`
+    SELECT
+      c.id AS challengeId,
+      COALESCE(MAX(a.score), 0) AS bestScore,
+      COALESCE(MAX(a.is_correct), 0) AS solved
+    FROM summary_challenges c
+    JOIN summaries s ON s.id = c.summary_id
+    LEFT JOIN challenge_attempts a ON a.challenge_id = c.id
+    WHERE s.challenge_category = 'codar'
+    GROUP BY c.id
+  `).all();
+
+  const solvedChallenges = bestRows.filter((r) => Number(r.solved || 0) === 1).length;
+  const bestScoreSum = bestRows.reduce((acc, row) => acc + Number(row.bestScore || 0), 0);
+  const xp = (solvedChallenges * 25) + Math.floor(bestScoreSum / 25);
+
+  const solvedDates = db.prepare(`
+    SELECT DISTINCT substr(a.created_at, 1, 10) AS day
+    FROM challenge_attempts a
+    JOIN summary_challenges c ON c.id = a.challenge_id
+    JOIN summaries s ON s.id = c.summary_id
+    WHERE s.challenge_category = 'codar' AND a.is_correct = 1
+    ORDER BY day DESC
+  `).all().map((row) => String(row.day || '').trim()).filter(Boolean);
+
+  let streakDays = 0;
+  let cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+  for (const day of solvedDates) {
+    const cursorDay = toDateOnly(cursor);
+    if (day === cursorDay) {
+      streakDays += 1;
+      cursor = addDays(cursor, -1);
+      cursor.setHours(0, 0, 0, 0);
+      continue;
+    }
+    if (streakDays === 0) {
+      cursor = addDays(cursor, -1);
+      cursor.setHours(0, 0, 0, 0);
+      const prevDay = toDateOnly(cursor);
+      if (day === prevDay) {
+        streakDays += 1;
+        cursor = addDays(cursor, -1);
+        cursor.setHours(0, 0, 0, 0);
+        continue;
+      }
+    }
+    break;
+  }
+
+  return {
+    xp,
+    solvedChallenges,
+    totalChallenges,
+    streakDays
+  };
+}
+
+function ensureCodarChallenges(summary) {
+  const existingRows = db.prepare(`
+    SELECT id, kind
+    FROM summary_challenges
+    WHERE summary_id = ?
+    ORDER BY order_index ASC, id ASC
+  `).all(summary.id);
+
+  if (existingRows.length) {
+    const kinds = new Set(existingRows.map((row) => String(row.kind || '').trim().toLowerCase()));
+    const hasLegacyKinds = kinds.has('complexity') || kinds.has('code_steps');
+    const hasExpectedSet = ['mcq', 'base_case', 'break_input', 'line_fill'].every((kind) => kinds.has(kind));
+    if (!hasLegacyKinds && hasExpectedSet) {
+      return;
+    }
+
+    const challengeIds = existingRows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+    if (challengeIds.length) {
+      const placeholders = challengeIds.map(() => '?').join(', ');
+      db.prepare(`DELETE FROM challenge_attempts WHERE challenge_id IN (${placeholders})`).run(...challengeIds);
+    }
+    db.prepare('DELETE FROM summary_challenges WHERE summary_id = ?').run(summary.id);
+  }
+
+  const notePath = normalizeSummaryNotePath(summary.id, summary.notePath);
+  const filePath = normalizeSummaryFilePath(summary.id, summary.filePath);
+  let sourceText = String(summary.codarBaseCode || '').trim();
+  if (!sourceText && notePath && isTextFilePath(notePath) && fs.existsSync(notePath)) {
+    sourceText = fs.readFileSync(notePath, 'utf8');
+  } else if (!sourceText && filePath && isTextFilePath(filePath) && fs.existsSync(filePath)) {
+    sourceText = fs.readFileSync(filePath, 'utf8');
+  }
+
+  const hasLoop = /(for|while|foreach|forEach)\s*\(/i.test(sourceText);
+  const hasRecursion = (() => {
+    const fnMatch = sourceText.match(/\bfunction\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/);
+    if (!fnMatch) return false;
+    const fnName = fnMatch[1];
+    return new RegExp(`\\b${fnName}\\s*\\(`, 'i').test(sourceText.replace(fnMatch[0], ''));
+  })();
+  const hasArrayAccess = /\[[^\]]+\]/.test(sourceText) || /\.(map|filter|reduce|sort|forEach)\s*\(/.test(sourceText);
+  const hasDivision = /[^*]\/[^/*]/.test(sourceText) || /%/.test(sourceText);
+
+  const nextStepExpected = hasLoop
+    ? 'Percorrer os dados e aplicar a condicao principal em cada item.'
+    : 'Validar entrada e aplicar a regra principal do algoritmo.';
+  const baseCaseExpected = hasRecursion
+    ? 'Parar em caso base (ex: lista vazia ou n <= 1) para evitar recursao infinita.'
+    : 'Tratar entradas minimas (ex: lista vazia ou 1 item) para evitar erro.';
+  const breakInputExpected = hasDivision
+    ? 'Entrada com divisor zero; validar antes de dividir.'
+    : (hasArrayAccess
+      ? 'Entrada vazia ou indice invalido; validar tamanho/indice antes de acessar.'
+      : 'Entrada nula/undefined; validar parametros antes de processar.');
+
+  const codeLines = String(sourceText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('//') && !line.startsWith('#') && line !== '{' && line !== '}');
+  const lineCandidate = codeLines.find((line) => /\b(if|for|while|return|const|let|var)\b/.test(line)) || codeLines[0] || 'return resultado;';
+  const lineTokens = lineCandidate.split(/\s+/).filter(Boolean);
+  const holeIndex = lineTokens.length >= 3 ? Math.floor(lineTokens.length / 2) : 0;
+  const missingToken = String(lineTokens[holeIndex] || lineTokens[0] || 'return').replace(/[;(),{}]/g, '').trim() || 'return';
+  if (lineTokens.length >= 1) {
+    lineTokens[holeIndex] = '____';
+  }
+  const lineMasked = lineTokens.join(' ') || '____';
+
+  const challengeDefs = [
+    {
+      kind: 'mcq',
+      title: 'Proximo passo no codigo',
+      prompt: `Ao comecar "${summary.title}", qual proximo passo faz mais sentido?`,
+      expectedAnswer: nextStepExpected,
+      options: [
+        nextStepExpected,
+        'Ignorar validacoes e testar direto com caso aleatorio.',
+        'Reescrever tudo sem considerar o codigo base.',
+        'Focar so em performance antes da logica funcionar.'
+      ]
+    },
+    {
+      kind: 'base_case',
+      title: 'Caso base',
+      prompt: 'Qual caso base evita erro ou loop infinito nessa implementacao?',
+      expectedAnswer: baseCaseExpected,
+      options: []
+    },
+    {
+      kind: 'break_input',
+      title: 'Entrada que quebra',
+      prompt: 'Cite uma entrada que pode quebrar este codigo e diga como tratar.',
+      expectedAnswer: breakInputExpected,
+      options: []
+    },
+    {
+      kind: 'line_fill',
+      title: 'Complete o trecho',
+      prompt: `Complete o termo faltante no trecho:\n${lineMasked}`,
+      expectedAnswer: missingToken,
+      options: []
+    }
+  ];
+
+  const insert = db.prepare(`
+    INSERT INTO summary_challenges (
+      summary_id, kind, title, prompt, expected_answer, options_json, order_index, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const now = new Date().toISOString();
+  challengeDefs.forEach((c, idx) => {
+    insert.run(
+      summary.id,
+      c.kind,
+      c.title,
+      c.prompt,
+      c.expectedAnswer,
+      JSON.stringify(Array.isArray(c.options) ? c.options : []),
+      idx + 1,
+      now
+    );
+  });
+}
+
+function regenerateLegacyCodarChallenges() {
+  try {
+    const codarSummaries = db.prepare(`
+      SELECT id, title, file_path AS filePath, note_path AS notePath, codar_base_code AS codarBaseCode
+      FROM summaries
+      WHERE challenge_category = 'codar'
+      ORDER BY id ASC
+    `).all();
+    let regenerated = 0;
+    for (const summary of codarSummaries) {
+      const before = db.prepare('SELECT COUNT(*) AS total FROM summary_challenges WHERE summary_id = ?').get(summary.id).total;
+      ensureCodarChallenges(summary);
+      const after = db.prepare('SELECT COUNT(*) AS total FROM summary_challenges WHERE summary_id = ?').get(summary.id).total;
+      if (Number(after) > 0 && (Number(before) === 0 || Number(before) !== Number(after))) {
+        regenerated += 1;
+      }
+    }
+    if (regenerated > 0) {
+      logEvent('codar.challenges.regenerated', { regenerated, totalCodarSummaries: codarSummaries.length });
+    }
+  } catch (err) {
+    console.error('Falha ao regenerar desafios Codar legados:', err);
+  }
 }
 
 function isInsideBase(baseDir, targetPath) {
@@ -2737,6 +3514,9 @@ function buildLogicalExport() {
     flashcards: db.prepare('SELECT * FROM flashcards ORDER BY id ASC').all(),
     metacogAlerts: db.prepare('SELECT * FROM metacog_alerts ORDER BY id ASC').all(),
     metacogRiskOverrides: db.prepare('SELECT * FROM metacog_risk_overrides ORDER BY summary_id ASC').all(),
+    summaryChallenges: db.prepare('SELECT * FROM summary_challenges ORDER BY id ASC').all(),
+    challengeAttempts: db.prepare('SELECT * FROM challenge_attempts ORDER BY id ASC').all(),
+    summaryVersions: db.prepare('SELECT * FROM summary_versions ORDER BY id ASC').all(),
     studyNotebooks: db.prepare('SELECT * FROM study_notebooks ORDER BY id ASC').all(),
     studyPages: db.prepare('SELECT * FROM study_pages ORDER BY id ASC').all()
   };
@@ -2748,12 +3528,18 @@ function restoreLogicalExport(payload) {
   const flashcards = Array.isArray(payload?.flashcards) ? payload.flashcards : [];
   const metacogAlerts = Array.isArray(payload?.metacogAlerts) ? payload.metacogAlerts : [];
   const metacogRiskOverrides = Array.isArray(payload?.metacogRiskOverrides) ? payload.metacogRiskOverrides : [];
+  const summaryChallenges = Array.isArray(payload?.summaryChallenges) ? payload.summaryChallenges : [];
+  const challengeAttempts = Array.isArray(payload?.challengeAttempts) ? payload.challengeAttempts : [];
+  const summaryVersions = Array.isArray(payload?.summaryVersions) ? payload.summaryVersions : [];
   const studyNotebooks = Array.isArray(payload?.studyNotebooks) ? payload.studyNotebooks : [];
   const studyPages = Array.isArray(payload?.studyPages) ? payload.studyPages : [];
 
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM study_pages').run();
     db.prepare('DELETE FROM study_notebooks').run();
+    db.prepare('DELETE FROM challenge_attempts').run();
+    db.prepare('DELETE FROM summary_challenges').run();
+    db.prepare('DELETE FROM summary_versions').run();
     db.prepare('DELETE FROM metacog_risk_overrides').run();
     db.prepare('DELETE FROM metacog_alerts').run();
     db.prepare('DELETE FROM flashcards').run();
@@ -2762,16 +3548,18 @@ function restoreLogicalExport(payload) {
 
     const insertSummary = db.prepare(`
       INSERT INTO summaries (
-        id, title, para_category, file_path, note_path, created_at, release_at, current_step,
+        id, title, para_category, challenge_category, codar_base_code, file_path, note_path, created_at, release_at, current_step,
         next_review_at, status, last_grade, loci_palace, loci_room, loci_hook
       ) VALUES (
-        @id, @title, @para_category, @file_path, @note_path, @created_at, @release_at, @current_step,
+        @id, @title, @para_category, @challenge_category, @codar_base_code, @file_path, @note_path, @created_at, @release_at, @current_step,
         @next_review_at, @status, @last_grade, @loci_palace, @loci_room, @loci_hook
       )
     `);
     for (const row of summaries) {
       insertSummary.run({
         ...row,
+        challenge_category: row.challenge_category || 'none',
+        codar_base_code: row.codar_base_code ?? null,
         note_path: row.note_path ?? null
       });
     }
@@ -2811,6 +3599,36 @@ function restoreLogicalExport(payload) {
     `);
     for (const row of metacogRiskOverrides) {
       insertRiskOverride.run(row);
+    }
+
+    const insertChallenge = db.prepare(`
+      INSERT INTO summary_challenges (
+        id, summary_id, kind, title, prompt, expected_answer, options_json, order_index, created_at
+      ) VALUES (
+        @id, @summary_id, @kind, @title, @prompt, @expected_answer, @options_json, @order_index, @created_at
+      )
+    `);
+    for (const row of summaryChallenges) {
+      insertChallenge.run(row);
+    }
+
+    const insertAttempt = db.prepare(`
+      INSERT INTO challenge_attempts (
+        id, challenge_id, summary_id, user_answer, is_correct, score, created_at
+      ) VALUES (
+        @id, @challenge_id, @summary_id, @user_answer, @is_correct, @score, @created_at
+      )
+    `);
+    for (const row of challengeAttempts) {
+      insertAttempt.run(row);
+    }
+
+    const insertVersion = db.prepare(`
+      INSERT INTO summary_versions (id, summary_id, reason, snapshot_json, created_at)
+      VALUES (@id, @summary_id, @reason, @snapshot_json, @created_at)
+    `);
+    for (const row of summaryVersions) {
+      insertVersion.run(row);
     }
 
     const insertNotebook = db.prepare(`

@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">Pular para conteudo principal</a>
     <div class="bg-shape bg-shape-1"></div>
     <div class="bg-shape bg-shape-2"></div>
 
@@ -29,10 +30,14 @@
           <span>Meta semanal</span>
           <strong id="weeklyGoalStat">0/0</strong>
         </article>
+        <article class="stat-pill">
+          <span>XP Codar</span>
+          <strong id="codarXpStat">0</strong>
+        </article>
       </div>
     </header>
 
-    <main class="grid">
+    <main id="mainContent" class="grid">
       <section class="panel panel-full module-nav">
         <h2>Dashboard de Entrada</h2>
         <div id="featureNav" class="module-nav-buttons">
@@ -45,9 +50,21 @@
           <button type="button" class="btn-secondary" data-feature-target="explorer">Explorador PARA</button>
           <button type="button" class="btn-secondary" data-feature-target="backup">Backup/Restore</button>
         </div>
+        <div class="quick-access-row">
+          <label class="toggle quick-toggle"><input id="simpleModeToggle" type="checkbox" /> Modo simples</label>
+          <button id="openGuideBtn" type="button" class="btn-secondary btn-small">Guia rapido (60s)</button>
+          <button id="openCommandPaletteBtn" type="button" class="btn-secondary btn-small">Busca global (Ctrl+K)</button>
+        </div>
       </section>
 
       <section class="panel panel-full feature-section" data-feature="home">
+        <article id="onboardingCard" class="item">
+          <div class="item-head">
+            <strong>Primeiros passos</strong>
+            <button id="dismissOnboardingBtn" type="button" class="btn-secondary btn-small">Ocultar</button>
+          </div>
+          <small class="muted">1) Escolha Categoria PARA e Subpasta. 2) Salve resumo/arquivo. 3) Revise na fila.</small>
+        </article>
         <section class="hero-learning">
           <div class="hero-overlay"></div>
           <div class="hero-content">
@@ -92,51 +109,58 @@
         <p class="muted" id="paraBreakdown"></p>
 
         <form id="summaryForm" class="form-grid">
-          <label>Titulo</label>
+          <label>Titulo do resumo</label>
           <input name="title" required maxlength="120" />
 
-          <div class="grid-two">
-            <div>
-              <label>Onde salvar (PARA)</label>
-              <select id="summaryParaCategory" name="paraCategory">
-                <option value="projects">Projects</option>
-                <option value="areas">Areas</option>
-                <option value="resources" selected>Resources</option>
-                <option value="inbox">Inbox</option>
-              </select>
-            </div>
-            <div>
-              <label>Subpasta</label>
-              <input id="summaryFolderName" name="folderName" placeholder="ex: curso_ingles/modulo_1" maxlength="120" />
-            </div>
-          </div>
-
-          <div class="grid-two">
-            <div>
-              <label>Subpastas ja criadas</label>
-              <select id="summarySavedFoldersSelect"></select>
-            </div>
-            <div>
-              <label>&nbsp;</label>
-              <button id="summaryUseSavedFolderBtn" type="button" class="btn-secondary">Usar no campo Subpasta</button>
+          <div class="folder-structure-box">
+            <strong>Gestao de pastas</strong>
+            <div class="grid-two">
+              <div>
+                <label>Categoria PARA</label>
+                <select id="summaryParaCategory" name="paraCategory">
+                  <option value="projects">Projects</option>
+                  <option value="areas">Areas</option>
+                  <option value="resources" selected>Resources</option>
+                  <option value="inbox">Inbox</option>
+                </select>
+              </div>
+              <div>
+                <label>Subpasta</label>
+                <select id="summarySavedFoldersSelect"></select>
+              </div>
             </div>
           </div>
+          <input id="summaryFolderName" name="folderName" type="hidden" value="" />
 
-          <label>Nome do arquivo</label>
-          <input name="fileName" placeholder="ex: resumo_aula_03" maxlength="120" />
+          <label>Categoria de desafio</label>
+          <select id="summaryChallengeCategory" name="challengeCategory">
+            <option value="none" selected>Sem desafio</option>
+            <option value="codar">Codar</option>
+          </select>
 
-          <label>Data de lancamento (opcional)</label>
-          <input type="date" name="launchDate" />
+          <div id="summaryCodarBaseCodeBox" class="hidden">
+            <label>Codigo base (obrigatorio para Codar)</label>
+            <textarea id="summaryCodarBaseCode" name="codarBaseCode" rows="8" placeholder="Cole aqui o codigo base que sera usado para gerar desafios praticos."></textarea>
+          </div>
 
-          <div class="memory-box">
+          <label class="advanced-field">Data de lancamento (opcional)</label>
+          <input class="advanced-field" type="date" name="launchDate" />
+
+          <div class="memory-box advanced-field">
             <h3>Loci (Palacio da Memoria)</h3>
             <input name="lociPalace" placeholder="Palacio (ex: Minha casa)" maxlength="160" />
             <input name="lociRoom" placeholder="Sala/rota (ex: Cozinha, bancada)" maxlength="160" />
             <textarea name="lociHook" rows="3" placeholder="Gancho visual absurdo para fixacao (ex: uma balanca gigante no fogao)"></textarea>
           </div>
 
-          <label>Flashcards (1 por linha: Pergunta::Resposta)</label>
-          <textarea name="flashcardsRaw" rows="4" placeholder="Capital da Franca::Paris&#10;Fotossintese acontece em::Cloroplastos"></textarea>
+          <label class="advanced-field">Flashcards (pergunta e resposta em campos separados)</label>
+          <div class="flashcard-editor advanced-field">
+            <div id="summaryFlashcardsEditor" class="flashcard-editor-list"></div>
+            <div class="item-actions">
+              <button id="summaryAddFlashcardBtn" type="button" class="btn-secondary">Adicionar flashcard</button>
+            </div>
+            <textarea id="summaryFlashcardsRaw" name="flashcardsRaw" class="hidden"></textarea>
+          </div>
 
           <label>Upload do arquivo</label>
           <input type="file" name="summaryFile" />
@@ -150,20 +174,30 @@
 
       <section class="panel panel-wide feature-section" data-feature="study">
         <h2>Fluxo de Apostila (Foto -> PDF -> Memorizacao)</h2>
+        <div class="folder-structure-box">
+          <strong>Gestao de pastas</strong>
+          <div class="grid-two">
+            <div>
+              <label>Categoria PARA</label>
+              <select id="studyParaCategory">
+                <option value="projects">Projects</option>
+                <option value="areas">Areas</option>
+                <option value="resources" selected>Resources</option>
+                <option value="inbox">Inbox</option>
+              </select>
+            </div>
+            <div>
+              <label>Subpasta</label>
+              <select id="studyModuleSelect"></select>
+            </div>
+          </div>
+        </div>
         <div class="grid-two">
           <div>
             <label>Materia</label>
             <input id="studySubject" placeholder="Ex: Biologia - Citologia" maxlength="120" />
           </div>
-          <div>
-            <label>Categoria PARA</label>
-            <select id="studyParaCategory">
-              <option value="projects">Projects</option>
-              <option value="areas">Areas</option>
-              <option value="resources" selected>Resources</option>
-              <option value="inbox">Inbox</option>
-            </select>
-          </div>
+          <div></div>
         </div>
         <div class="grid-two">
           <div>
@@ -175,18 +209,7 @@
             <button id="studyUseSubjectBtn" type="button" class="btn-secondary">Usar no campo Materia</button>
           </div>
         </div>
-        <label>Subpasta (modulo opcional)</label>
-        <input id="studyFolderName" placeholder="ex: modulo_1 ou modulo_1/unidade_2" maxlength="120" />
-        <div class="grid-two">
-          <div>
-            <label>Subpastas existentes da materia</label>
-            <select id="studyModuleSelect"></select>
-          </div>
-          <div>
-            <label>&nbsp;</label>
-            <div></div>
-          </div>
-        </div>
+        <input id="studyFolderName" type="hidden" value="" />
         <div class="toolbar compact">
           <button id="createNotebookBtn" type="button" class="btn-secondary">1) Criar/Selecionar caderno</button>
           <p id="studyAutoSelectStatus" class="muted upload-status">Caderno selecionado automaticamente pelos campos acima.</p>
@@ -222,6 +245,26 @@
 
       <section class="panel feature-section" data-feature="review">
         <h2>Fila de Revisao</h2>
+        <div class="folder-structure-box">
+          <strong>Gestao de pastas</strong>
+          <div class="grid-two">
+            <div>
+              <label>Categoria PARA</label>
+              <select id="reviewParaFilter">
+                <option value="all" selected>Todas</option>
+                <option value="projects">Projects</option>
+                <option value="areas">Areas</option>
+                <option value="resources">Resources</option>
+                <option value="inbox">Inbox</option>
+                <option value="archives">Archives</option>
+              </select>
+            </div>
+            <div>
+              <label>Subpasta</label>
+              <select id="reviewFolderFilter"></select>
+            </div>
+          </div>
+        </div>
         <div id="queue" class="list"></div>
       </section>
 
@@ -229,25 +272,71 @@
         <h2>Biblioteca</h2>
         <div class="grid-two">
           <div>
-            <label>Filtrar por pasta PARA</label>
-            <select id="libraryParaFilter">
-              <option value="all" selected>Todas</option>
-              <option value="projects">Projects</option>
-              <option value="areas">Areas</option>
-              <option value="resources">Resources</option>
-              <option value="inbox">Inbox</option>
-              <option value="archives">Archives</option>
+            <label>Busca</label>
+            <input id="librarySearchInput" placeholder="Buscar por titulo..." />
+          </div>
+          <div>
+            <label>Itens por pagina</label>
+            <select id="libraryPageSize">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
             </select>
           </div>
-          <div></div>
+        </div>
+        <div class="folder-structure-box">
+          <strong>Gestao de pastas</strong>
+          <div class="grid-two">
+            <div>
+              <label>Categoria PARA</label>
+              <select id="libraryParaFilter">
+                <option value="all" selected>Todas</option>
+                <option value="projects">Projects</option>
+                <option value="areas">Areas</option>
+                <option value="resources">Resources</option>
+                <option value="inbox">Inbox</option>
+                <option value="archives">Archives</option>
+              </select>
+            </div>
+            <div>
+              <label>Subpasta</label>
+              <select id="libraryFolderFilter"></select>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar compact">
+          <button id="libraryPrevPageBtn" type="button" class="btn-secondary btn-small">Anterior</button>
+          <p id="libraryPageInfo" class="muted upload-status">Pagina 1</p>
+          <button id="libraryNextPageBtn" type="button" class="btn-secondary btn-small">Proxima</button>
         </div>
         <div id="library" class="library-grid"></div>
       </section>
 
       <section class="panel feature-section" data-feature="metacog">
         <h2>Metacognicao</h2>
+        <div class="folder-structure-box">
+          <strong>Gestao de pastas</strong>
+          <div class="grid-two">
+            <div>
+              <label>Categoria PARA</label>
+              <select id="metacogParaFilter">
+                <option value="all" selected>Todas</option>
+                <option value="projects">Projects</option>
+                <option value="areas">Areas</option>
+                <option value="resources">Resources</option>
+                <option value="inbox">Inbox</option>
+                <option value="archives">Archives</option>
+              </select>
+            </div>
+            <div>
+              <label>Subpasta</label>
+              <select id="metacogFolderFilter"></select>
+            </div>
+          </div>
+        </div>
         <p class="muted" id="cognitiveLoadText">Carga cognitiva: --</p>
         <p class="muted" id="alertsCountText">Alertas de ilusao: 0</p>
+        <label class="toggle"><input id="metacogOnlyRiskToggle" type="checkbox" /> Mostrar apenas itens em risco</label>
         <p class="muted">Criterio: confianca >= 75% e nota diferente de "Lembrei bem".</p>
         <h3>Itens monitorados</h3>
         <div id="metacogCandidatesList" class="list"></div>
@@ -258,22 +347,25 @@
       <section class="panel panel-wide feature-section" data-feature="explorer">
         <h2>Explorador PARA</h2>
 
-        <div class="toolbar">
-          <select id="browserCategory">
-            <option value="projects">Projects</option>
-            <option value="areas">Areas</option>
-            <option value="resources" selected>Resources</option>
-            <option value="inbox">Inbox</option>
-            <option value="archives">Archives</option>
-          </select>
-          <input id="browserPath" placeholder="Subpasta atual" />
-          <button id="browseBtn" type="button" class="btn-secondary">Abrir pasta</button>
-        </div>
-
-        <div class="toolbar compact">
-          <select id="savedFoldersSelect"></select>
-          <p class="muted upload-status">Selecione uma pasta salva para abrir automaticamente.</p>
-          <div></div>
+        <div class="folder-structure-box">
+          <strong>Gestao de pastas</strong>
+          <div class="grid-two">
+            <div>
+              <label>Categoria PARA</label>
+              <select id="browserCategory">
+                <option value="projects">Projects</option>
+                <option value="areas">Areas</option>
+                <option value="resources" selected>Resources</option>
+                <option value="inbox">Inbox</option>
+                <option value="archives">Archives</option>
+              </select>
+            </div>
+            <div>
+              <label>Subpasta</label>
+              <select id="savedFoldersSelect"></select>
+            </div>
+          </div>
+          <p class="muted">Selecione a subpasta. Para raiz, use "Raiz da categoria".</p>
         </div>
 
         <div class="toolbar compact">
@@ -310,6 +402,32 @@
         <p id="backupStatus" class="muted">Nenhuma acao executada.</p>
       </section>
     </main>
+    <div id="toastRegion" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <div id="commandPaletteModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Busca global</h3>
+          <button id="closeCommandPaletteBtn" type="button" class="btn-secondary">Fechar</button>
+        </div>
+        <input id="commandPaletteInput" placeholder="Digite para buscar resumo, pasta ou acao..." />
+        <div id="commandPaletteResults" class="list"></div>
+      </div>
+    </div>
+
+    <div id="quickGuideModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Guia rapido</h3>
+          <button id="closeQuickGuideBtn" type="button" class="btn-secondary">Fechar</button>
+        </div>
+        <div id="quickGuideBody" class="list"></div>
+        <div class="item-actions">
+          <button id="quickGuideNextBtn" type="button" class="btn-secondary">Proximo</button>
+          <button id="quickGuideDoneBtn" type="button">Concluir</button>
+        </div>
+      </div>
+    </div>
 
     <div id="reviewModal" class="modal hidden">
       <div class="modal-content review-modal">
@@ -410,8 +528,14 @@
           <textarea id="quickLociHook" rows="2" placeholder="Gancho visual"></textarea>
         </div>
 
-        <label>Flashcards conectados (1 por linha: Pergunta::Resposta)</label>
-        <textarea id="quickFlashcardsRaw" rows="4" placeholder="Pergunta::Resposta"></textarea>
+        <label>Flashcards conectados</label>
+        <div class="flashcard-editor">
+          <div id="quickFlashcardsEditor" class="flashcard-editor-list"></div>
+          <div class="item-actions">
+            <button id="quickAddFlashcardBtn" type="button" class="btn-secondary">Adicionar flashcard</button>
+          </div>
+          <textarea id="quickFlashcardsRaw" class="hidden"></textarea>
+        </div>
         <button id="saveQuickMemoryBtn" type="button" class="btn-secondary">Salvar Loci + Flashcards</button>
 
         <p id="quickSummaryCards" class="muted"></p>
@@ -423,7 +547,43 @@
         <pre id="quickSummaryPreview" class="preview-box"></pre>
         <div class="item-actions">
           <a id="quickSummaryOpenLink" target="_blank" rel="noreferrer">Abrir arquivo</a>
+          <button id="quickSummaryHistoryBtn" type="button" class="btn-secondary">Historico</button>
         </div>
+
+        <section id="quickChallengeSection" class="memory-box hidden">
+          <h3>Desafios Codar</h3>
+          <p id="quickChallengeMeta" class="muted">Carregando desafios...</p>
+          <div class="challenge-progress-wrap">
+            <div id="quickChallengeProgressBar" class="challenge-progress-bar" style="width:0%"></div>
+          </div>
+          <p id="quickChallengeProgressText" class="muted">Progresso: 0/0</p>
+          <div id="quickChallengesList" class="list"></div>
+        </section>
+      </div>
+    </div>
+
+    <div id="appDialogModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="appDialogTitle">Confirmacao</h3>
+          <button id="appDialogCloseBtn" type="button" class="btn-secondary">Fechar</button>
+        </div>
+        <p id="appDialogMessage" class="muted"></p>
+        <input id="appDialogInput" class="hidden" />
+        <div class="item-actions">
+          <button id="appDialogCancelBtn" type="button" class="btn-secondary">Cancelar</button>
+          <button id="appDialogOkBtn" type="button">Confirmar</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="summaryHistoryModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="summaryHistoryTitle">Historico</h3>
+          <button id="closeSummaryHistoryModalBtn" type="button" class="btn-secondary">Fechar</button>
+        </div>
+        <div id="summaryHistoryList" class="list"></div>
       </div>
     </div>
 
